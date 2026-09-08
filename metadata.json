@@ -1,0 +1,6 @@
+{
+  "name": "نظام وصولات تسليم البضائع - أطلس المحيط",
+  "description": "برنامج متكامل لإدارة وصولات تسليم البضائع، موافقة إخراج الشحنات، وجرد الساحة مع جداول بيانات تفصيلية وأزرار طباعة عالية الحرفية.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
