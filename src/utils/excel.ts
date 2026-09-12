@@ -118,6 +118,8 @@ export function exportYardInventoryToExcel(
     return {
       'التسلسل': idx + 1,
       'كود العميل': item.code,
+      'المبلغ / الديون ($)': item.sales || 0,
+      'الكفيل': item.guarantor || '',
       'اسم العميل': item.name,
       'العنوان': item.address,
       'المحافظة': item.city,
@@ -133,6 +135,8 @@ export function exportYardInventoryToExcel(
   ws['!cols'] = [
     { wch: 8 },
     { wch: 14 },
+    { wch: 18 },
+    { wch: 18 },
     { wch: 24 },
     { wch: 30 },
     { wch: 16 },

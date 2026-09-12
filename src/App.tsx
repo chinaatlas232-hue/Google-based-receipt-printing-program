@@ -14,7 +14,6 @@ import { YardInventoryModal } from './components/YardInventoryModal';
 import { FullReportPrintModal } from './components/FullReportPrintModal';
 import { AddShipmentModal } from './components/AddShipmentModal';
 import { DriveSyncModal } from './components/DriveSyncModal';
-import { DispatchApprovalView } from './components/DispatchApprovalView';
 import { YardInventoryView } from './components/YardInventoryView';
 import { ShipmentReportsView } from './components/ShipmentReportsView';
 import { exportShipmentsToExcel, exportYardInventoryToExcel } from './utils/excel';
@@ -492,10 +491,6 @@ export default function App() {
               />
             </div>
           </div>
-        )}
-
-        {activePage === 'dispatch_approval' && (
-          <DispatchApprovalView shipments={shipments} />
         )}
 
         {activePage === 'yard_inventory' && (

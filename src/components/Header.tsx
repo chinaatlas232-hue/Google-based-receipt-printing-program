@@ -147,18 +147,6 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
 
             <button
-              onClick={() => setActivePage('dispatch_approval')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${
-                activePage === 'dispatch_approval'
-                  ? 'bg-amber-500 text-slate-950 shadow-md font-extrabold'
-                  : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
-              }`}
-            >
-              <FileCheck2 className="w-4 h-4" />
-              <span>موافقة إخراج البضائع</span>
-            </button>
-
-            <button
               onClick={() => setActivePage('yard_inventory')}
               className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${
                 activePage === 'yard_inventory'

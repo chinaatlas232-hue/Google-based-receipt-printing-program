@@ -304,7 +304,8 @@ export interface YardState {
   checkedItems: Record<string, boolean>;
   actualCounts: Record<string, number | ''>;
   itemNotes: Record<string, string>;
-  dispatchedItems: Record<string, { dispatched: boolean; time: string; user?: string }>;
+  dispatchedItems: Record<string, { dispatched: boolean; time: string; fullDateTime?: string; user?: string }>;
+  entryDates?: Record<string, string>;
   itemLastModified: Record<string, { userName: string; time: string; action: string; timestamp: number }>;
   history: YardEvent[];
 }
@@ -316,6 +317,7 @@ let cachedYardState: YardState = {
   actualCounts: {},
   itemNotes: {},
   dispatchedItems: {},
+  entryDates: {},
   itemLastModified: {},
   history: []
 };
@@ -332,6 +334,7 @@ if (fs.existsSync(yardStatePath)) {
       actualCounts: parsed.actualCounts || {},
       itemNotes: parsed.itemNotes || {},
       dispatchedItems: parsed.dispatchedItems || {},
+      entryDates: parsed.entryDates || {},
       itemLastModified: parsed.itemLastModified || {},
       history: Array.isArray(parsed.history) ? parsed.history : []
     };
@@ -438,6 +441,10 @@ app.post('/api/yard-inventory/update', (req, res) => {
       if (changes?.dispatched !== undefined) {
         cachedYardState.dispatchedItems[itemId] = changes.dispatched;
       }
+      if (changes?.entryDate !== undefined) {
+        if (!cachedYardState.entryDates) cachedYardState.entryDates = {};
+        cachedYardState.entryDates[itemId] = changes.entryDate;
+      }
 
       cachedYardState.itemLastModified[itemId] = {
         userName: newEvent.userName,
@@ -468,7 +475,7 @@ app.post('/api/yard-inventory/update', (req, res) => {
 // 5. POST full save or bulk sync
 app.post('/api/yard-inventory/save-all', (req, res) => {
   try {
-    const { deviceId, userName, checkedItems, actualCounts, itemNotes, dispatchedItems, action, draft } = req.body;
+    const { deviceId, userName, checkedItems, actualCounts, itemNotes, dispatchedItems, entryDates, action, draft } = req.body;
     const now = new Date();
     const timeStr = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     const fullDateStr = `${now.toISOString().slice(0, 10)} ${timeStr}`;
@@ -477,11 +484,13 @@ app.post('/api/yard-inventory/save-all', (req, res) => {
     const finalCounts = actualCounts || draft?.actualCounts;
     const finalNotes = itemNotes || draft?.itemNotes;
     const finalDispatched = dispatchedItems || draft?.dispatchedItems;
+    const finalEntryDates = entryDates || draft?.entryDates;
 
     if (finalChecked) cachedYardState.checkedItems = finalChecked;
     if (finalCounts) cachedYardState.actualCounts = finalCounts;
     if (finalNotes) cachedYardState.itemNotes = finalNotes;
     if (finalDispatched) cachedYardState.dispatchedItems = finalDispatched;
+    if (finalEntryDates) cachedYardState.entryDates = finalEntryDates;
 
     cachedYardState.lastSavedAt = fullDateStr;
     cachedYardState.lastModifiedBy = userName || 'مشرف الساحة';
@@ -499,7 +508,61 @@ app.post('/api/yard-inventory/save-all', (req, res) => {
         checkedItems: finalChecked,
         actualCounts: finalCounts,
         itemNotes: finalNotes,
-        dispatchedItems: finalDispatched
+        dispatchedItems: finalDispatched,
+        entryDates: finalEntryDates
+      }
+    };
+
+    cachedYardState.history = [newEvent, ...cachedYardState.history.slice(0, 199)];
+
+    persistYardState();
+    broadcastToSSE(newEvent);
+
+    res.json({
+      success: true,
+      event: newEvent,
+      state: cachedYardState
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 5.5 POST batch entry date for shipment
+app.post('/api/yard-inventory/batch-entry-date', (req, res) => {
+  try {
+    const { deviceId, userName, shipment, entryDate, itemIds, action } = req.body;
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const fullDateStr = `${now.toISOString().slice(0, 10)} ${timeStr}`;
+
+    if (!cachedYardState.entryDates) {
+      cachedYardState.entryDates = {};
+    }
+
+    if (Array.isArray(itemIds) && entryDate) {
+      itemIds.forEach((id: string) => {
+        if (cachedYardState.entryDates) {
+          cachedYardState.entryDates[id] = entryDate;
+        }
+      });
+    }
+
+    cachedYardState.lastSavedAt = fullDateStr;
+    cachedYardState.lastModifiedBy = userName || 'مشرف الساحة';
+
+    const newEvent: YardEvent = {
+      id: Math.random().toString(36).substring(2) + Date.now(),
+      deviceId: deviceId || 'unknown',
+      userName: userName || 'مشرف الساحة',
+      action: action || `تثبيت تاريخ دخول موحد (${entryDate}) للشحنة [${shipment || 'عام'}]`,
+      itemCode: shipment || 'عام',
+      shipment: shipment || '',
+      time: timeStr,
+      timestamp: Date.now(),
+      changes: {
+        allSaved: true,
+        entryDates: cachedYardState.entryDates
       }
     };
 
