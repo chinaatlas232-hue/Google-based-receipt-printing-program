@@ -37,4 +37,4 @@ export interface FilterState {
   searchQuery: string;
 }
 
-export type ActivePage = 'dashboard' | 'dispatch_approval' | 'yard_inventory';
+export type ActivePage = 'dashboard' | 'dispatch_approval' | 'yard_inventory' | 'reports';

@@ -11,7 +11,8 @@ import {
   ChevronLeft,
   ChevronsRight,
   ChevronsLeft,
-  FileSpreadsheet
+  FileSpreadsheet,
+  RefreshCw
 } from 'lucide-react';
 import { ShipmentRecord } from '../types';
 
@@ -21,6 +22,8 @@ interface ShipmentTableProps {
   onPrintReceipt: (shipment: ShipmentRecord) => void;
   onEditShipment: (shipment: ShipmentRecord) => void;
   onDeleteShipment: (id: string) => void;
+  onSyncDrive?: () => void;
+  isSyncing?: boolean;
 }
 
 type SortField = 'code' | 'name' | 'weight' | 'cbm' | 'packages' | 'price' | 'sales' | 'shipment';
@@ -32,6 +35,8 @@ export const ShipmentTable: React.FC<ShipmentTableProps> = ({
   onPrintReceipt,
   onEditShipment,
   onDeleteShipment,
+  onSyncDrive,
+  isSyncing = false,
 }) => {
   const [sortField, setSortField] = useState<SortField>('code');
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
@@ -116,7 +121,20 @@ export const ShipmentTable: React.FC<ShipmentTableProps> = ({
         </div>
 
         {/* Page Size & Count & Column Toggle */}
-        <div className="flex flex-wrap items-center gap-3 text-xs">
+        <div className="flex flex-wrap items-center gap-2.5 text-xs">
+          {/* Quick Table Sync Button */}
+          {onSyncDrive && (
+            <button
+              onClick={onSyncDrive}
+              disabled={isSyncing}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all border border-amber-500/40 bg-slate-800 hover:bg-slate-700 text-amber-300 shadow-xs cursor-pointer select-none active:scale-95 disabled:opacity-50"
+              title="تحديث ومزامنة فورية لبيانات الشحنات من Google Sheets"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-amber-400' : 'text-amber-400'}`} />
+              <span>{isSyncing ? 'جارٍ التحديث...' : 'تحديث الشيت (Sync)'}</span>
+            </button>
+          )}
+
           {/* Toggle Actions Column Button */}
           <button
             onClick={toggleActionsColumn}

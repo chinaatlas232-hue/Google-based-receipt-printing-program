@@ -16,6 +16,7 @@ import { AddShipmentModal } from './components/AddShipmentModal';
 import { DriveSyncModal } from './components/DriveSyncModal';
 import { DispatchApprovalView } from './components/DispatchApprovalView';
 import { YardInventoryView } from './components/YardInventoryView';
+import { ShipmentReportsView } from './components/ShipmentReportsView';
 import { exportShipmentsToExcel, exportYardInventoryToExcel } from './utils/excel';
 import { auth } from './services/firebaseAuth';
 
@@ -36,6 +37,7 @@ export default function App() {
 
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [isDriveSyncing, setIsDriveSyncing] = useState(false);
+  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
   const [syncBanner, setSyncBanner] = useState<{ type: 'loading' | 'success' | 'error'; message: string } | null>(null);
 
   // Sidebar Visibility State (Full Width Expansion)
@@ -60,41 +62,66 @@ export default function App() {
     });
   };
 
-  // Fetch real merged data from server backend on mount
+  // Fetch real merged data from server backend on mount and auto-sync periodically
   useEffect(() => {
-    async function loadBackendData() {
+    async function loadBackendData(force = false) {
       try {
-        const res = await fetch('/api/data');
+        const url = force ? '/api/data?force=true' : '/api/data';
+        const res = await fetch(url);
         if (res.ok) {
           const json = await res.json();
           if (json.success && Array.isArray(json.shipments) && json.shipments.length > 0) {
             setShipments(json.shipments);
-            console.log(`Loaded ${json.shipments.length} records from server database`);
+            if (json.lastSync) {
+              setLastSyncTime(json.lastSync);
+            }
+            console.log(`[Google Sheets Sync] Loaded ${json.shipments.length} records. Last sync: ${json.lastSync}`);
           }
         }
       } catch (err) {
         console.warn('Could not load /api/data:', err);
       }
     }
-    loadBackendData();
+
+    // Initial live fetch from Google Sheets
+    loadBackendData(true);
+
+    // Periodic auto-sync every 30 seconds
+    const interval = setInterval(() => {
+      loadBackendData(false);
+    }, 30 * 1000);
+
+    // Auto-sync when window gains focus
+    const handleWindowFocus = () => {
+      loadBackendData(false);
+    };
+    window.addEventListener('focus', handleWindowFocus);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', handleWindowFocus);
+    };
   }, []);
 
   const handleDirectDriveSync = async () => {
     setIsDriveSyncing(true);
     setSyncBanner({
       type: 'loading',
-      message: 'جارٍ سحب وتحديث ملفات الشحنات والعملاء من Google Drive ودمجها...'
+      message: 'جارٍ سحب وتحديث أحدث بيانات الشحنات والعملاء مباشرة من Google Sheets...'
     });
     try {
       const res = await fetch('/api/sync-drive', { method: 'POST' });
       const data = await res.json();
       if (data.success && Array.isArray(data.shipments)) {
         setShipments(data.shipments);
+        if (data.lastSync) {
+          setLastSyncTime(data.lastSync);
+        }
         setSyncBanner({
           type: 'success',
-          message: `تم بنجاح سحب وتحديث ${data.count.toLocaleString('ar-IQ')} شحنة من Google Drive ودمج بيانات العملاء!`
+          message: `تم بنجاح تحديث وتزامن ${data.count.toLocaleString('ar-IQ')} شحنة مباشرة مع Google Sheets وتحديث كافة الحسابات والأسعار!`
         });
-        setTimeout(() => setSyncBanner(null), 8000);
+        setTimeout(() => setSyncBanner(null), 7000);
       } else {
         throw new Error(data.error || 'حدث خطأ أثناء السحب');
       }
@@ -102,7 +129,7 @@ export default function App() {
       console.error(err);
       setSyncBanner({
         type: 'error',
-        message: `تعذر سحب البيانات: ${err.message || 'خطأ في الاتصال بالسيرفر'}`
+        message: `تعذر التزامن مع Google Sheets: ${err.message || 'خطأ في الاتصال بالسيرفر'}`
       });
     } finally {
       setIsDriveSyncing(false);
@@ -341,6 +368,9 @@ export default function App() {
         setActivePage={setActivePage}
         isSidebarVisible={isSidebarVisible}
         onToggleSidebar={handleToggleSidebar}
+        onSyncDrive={handleDirectDriveSync}
+        isSyncing={isDriveSyncing}
+        lastSyncTime={lastSyncTime}
       />
 
       {/* 2. Main Page Content (Full Width) */}
@@ -457,6 +487,8 @@ export default function App() {
                 onPrintReceipt={handlePrintSingleReceipt}
                 onEditShipment={handleOpenEdit}
                 onDeleteShipment={handleDeleteShipment}
+                onSyncDrive={handleDirectDriveSync}
+                isSyncing={isDriveSyncing}
               />
             </div>
           </div>
@@ -470,6 +502,14 @@ export default function App() {
           <YardInventoryView 
             shipments={shipments} 
             onNavigateToDashboard={() => setActivePage('dashboard')}
+          />
+        )}
+
+        {activePage === 'reports' && (
+          <ShipmentReportsView 
+            shipments={shipments} 
+            onSyncDrive={handleDirectDriveSync} 
+            isSyncing={isDriveSyncing} 
           />
         )}
       </main>

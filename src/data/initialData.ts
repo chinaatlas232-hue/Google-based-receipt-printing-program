@@ -98,7 +98,7 @@ export const initialShipments: ShipmentRecord[] = [
   },
   {
     id: '6',
-    shipment: 'TK4090',
+    shipment: 'RQ4090',
     code: 'KR771',
     name: 'علي حسين الكربلائي',
     guarantor: 'شركة الرافدين للتجارة',
@@ -111,13 +111,13 @@ export const initialShipments: ShipmentRecord[] = [
     phone2: '+964 7726655443',
     address: 'شارع العباس - قرب ساحة الحسين',
     city: 'كربلاء المقدسة',
-    type: 'بري سريع',
+    type: 'بحري تجاري',
     status: 'جاهز للتسليم',
     notes: 'مواد كهربائية'
   },
   {
     id: '7',
-    shipment: 'TK4090',
+    shipment: 'RQ4090',
     code: 'SL202',
     name: 'آرام شوان كاكائي',
     guarantor: 'شركة الصقر اللوجستية',
@@ -130,13 +130,13 @@ export const initialShipments: ShipmentRecord[] = [
     phone2: '',
     address: 'سركريز - شارع سالم',
     city: 'السليمانية',
-    type: 'جوي سريع',
+    type: 'بحري تجاري',
     status: 'جاهز للتسليم',
     notes: 'هواتف ذكية وملحقاتها'
   },
   {
     id: '8',
-    shipment: 'TK4090',
+    shipment: 'RQ4090',
     code: 'MS615',
     name: 'عمر خالد الحيالي',
     guarantor: 'شركة النور للتجارة',

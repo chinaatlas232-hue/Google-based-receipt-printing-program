@@ -141,15 +141,15 @@ export const DashboardSidebar: React.FC<DashboardSidebarProps> = ({
               <button
                 onClick={onSyncDrive}
                 disabled={isSyncing}
-                className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-black text-xs shadow-md shadow-amber-400/20 active:scale-98 transition-all disabled:opacity-60"
-                title="تحديث وسحب أحدث بيانات الشحنات والعملاء من Google Drive فوراً"
+                className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-black text-xs shadow-md shadow-amber-400/20 active:scale-98 transition-all disabled:opacity-60 cursor-pointer"
+                title="تحديث وسحب أحدث بيانات الشحنات والعملاء مباشرة من Google Sheets فوراً"
               >
                 <div className="flex items-center gap-2">
-                  <RefreshCw className={`w-4 h-4 shrink-0 ${isSyncing ? 'animate-spin' : ''}`} />
-                  <span>{isSyncing ? 'جارٍ السحب من درايف...' : '🔄 سحب وتحديث من درايف'}</span>
+                  <RefreshCw className={`w-4 h-4 shrink-0 stroke-[2.5] ${isSyncing ? 'animate-spin' : ''}`} />
+                  <span>{isSyncing ? 'جارٍ مزامنة الشيت...' : '🔄 مزامنة الشيت (Sync)'}</span>
                 </div>
                 <span className="text-[10px] bg-slate-950/20 text-slate-950 px-1.5 py-0.5 rounded font-bold">
-                  سحابي
+                  Sheets
                 </span>
               </button>
             )}
