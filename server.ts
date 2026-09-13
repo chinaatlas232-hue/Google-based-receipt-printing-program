@@ -637,7 +637,18 @@ async function startServer() {
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      plugins: [
+        {
+          name: 'strip-vite-hmr-client',
+          transformIndexHtml: {
+            order: 'post',
+            handler(html) {
+              return html.replace(/<script type="module" src="\/@vite\/client"><\/script>/g, '');
+            },
+          },
+        },
+      ],
+      server: { middlewareMode: true, hmr: false },
       appType: 'spa',
     });
     app.use(vite.middlewares);

@@ -3,6 +3,72 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      (function() {
+        // 1. Intercept WebSocket to prevent [vite] failed to connect to websocket in Cloud Run sandbox
+        if (typeof window !== 'undefined') {
+          var OrigWebSocket = window.WebSocket;
+          if (OrigWebSocket) {
+            window.WebSocket = function(url, protocols) {
+              if (typeof url === 'string' && (url.indexOf('vite') !== -1 || url.indexOf('localhost') !== -1 || url.indexOf(':3000') !== -1 || url.indexOf('run.app') !== -1)) {
+                var dummy = new EventTarget();
+                dummy.url = url;
+                dummy.readyState = 3; // CLOSED
+                dummy.send = function() {};
+                dummy.close = function() {};
+                setTimeout(function() {
+                  var ev = new Event('close');
+                  ev.wasClean = true;
+                  ev.code = 1000;
+                  dummy.dispatchEvent(ev);
+                }, 10);
+                return dummy;
+              }
+              return new OrigWebSocket(url, protocols);
+            };
+            window.WebSocket.prototype = OrigWebSocket.prototype;
+          }
+        }
+
+        // 2. Suppress any console.error or console.warn related to vite websocket
+        var origError = console.error;
+        console.error = function() {
+          var args = Array.prototype.slice.call(arguments);
+          var str = args.map(function(a) { return String(a && a.message ? a.message : a); }).join(' ');
+          if (str.indexOf('[vite]') !== -1 || str.indexOf('WebSocket') !== -1 || str.indexOf('websocket') !== -1) {
+            return;
+          }
+          return origError.apply(console, arguments);
+        };
+
+        var origWarn = console.warn;
+        console.warn = function() {
+          var args = Array.prototype.slice.call(arguments);
+          var str = args.map(function(a) { return String(a && a.message ? a.message : a); }).join(' ');
+          if (str.indexOf('[vite]') !== -1 || str.indexOf('WebSocket') !== -1 || str.indexOf('websocket') !== -1) {
+            return;
+          }
+          return origWarn.apply(console, arguments);
+        };
+
+        // 3. Prevent unhandled rejections and global errors for websocket
+        window.addEventListener('unhandledrejection', function(event) {
+          var reason = event && event.reason;
+          var msg = reason ? (reason.message || String(reason)) : '';
+          if (msg.indexOf('WebSocket') !== -1 || msg.indexOf('websocket') !== -1 || msg.indexOf('vite') !== -1) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+          }
+        });
+        window.addEventListener('error', function(event) {
+          var msg = event && (event.message || '');
+          if (msg.indexOf('WebSocket') !== -1 || msg.indexOf('websocket') !== -1 || msg.indexOf('[vite]') !== -1) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+          }
+        });
+      })();
+    </script>
     <title>نظام وصولات تسليم البضائع - أطلس المحيط</title>
     <meta name="description" content="برنامج متكامل لإدارة وصولات تسليم البضائع، موافقة إخراج الشحنات، وجرد الساحة مع جداول بيانات تفصيلية وأزرار طباعة عالية الحرفية." />
     <meta property="og:title" content="نظام وصولات تسليم البضائع - أطلس المحيط" />

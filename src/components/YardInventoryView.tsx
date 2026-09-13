@@ -19,6 +19,7 @@ import {
   MessageSquare,
   Eye,
   CheckSquare,
+  Square,
   Truck,
   Bell,
   UserCheck,
@@ -34,7 +35,19 @@ import {
   Plane,
   Calendar,
   DollarSign,
-  ChevronDown
+  ChevronDown,
+  MessageCircle,
+  Send,
+  Share2,
+  Copy,
+  History,
+  ListChecks,
+  Tag,
+  SlidersHorizontal,
+  TrendingUp,
+  Wallet,
+  Percent,
+  FileText
 } from 'lucide-react';
 import { ShipmentRecord } from '../types';
 import { COMPANY_INFO } from '../data/initialData';
@@ -70,6 +83,17 @@ export interface TeamActivityAlert {
   itemId?: string;
   time: string;
   isExternalDevice?: boolean;
+}
+
+export interface YardAuditLog {
+  id: string;
+  itemId?: string;
+  code?: string;
+  clientName?: string;
+  shipment?: string;
+  userName: string;
+  action: string;
+  timestamp: string;
 }
 
 // Utility: Normalize and convert any Eastern Arabic / Persian numerals (٠-٩) to standard English numerals (0-9)
@@ -274,6 +298,67 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
   const [batchEntryDate, setBatchEntryDate] = useState<string>(() => {
     return new Date().toISOString().slice(0, 10);
   });
+
+  // 1. Batch Selection for Bulk Actions
+  const [selectedItemIds, setSelectedItemIds] = useState<Record<string, boolean>>({});
+
+  // 2. Advanced Filtering: By Guarantor / Responsible Employee & Financial Status
+  const [selectedGuarantor, setSelectedGuarantor] = useState<string>('الكل');
+  const [financialFilter, setFinancialFilter] = useState<'all' | 'with_debt' | 'zero_debt' | 'high_debt'>('all');
+
+  // 3. Client Communication (WhatsApp / Telegram Alerts)
+  const [activeMessageClient, setActiveMessageClient] = useState<ShipmentRecord | null>(null);
+  const [messageTemplate, setMessageTemplate] = useState<'ready' | 'overdue' | 'mismatch' | 'debt'>('ready');
+  const [customMessageText, setCustomMessageText] = useState<string>('');
+
+  // 4. Audit Trail Tracking Modal
+  const [auditTrailItem, setAuditTrailItem] = useState<ShipmentRecord | null>(null);
+  const [showFullAuditModal, setShowFullAuditModal] = useState<boolean>(false);
+  const [auditLogs, setAuditLogs] = useState<YardAuditLog[]>(() => {
+    try {
+      const raw = localStorage.getItem('atlas_yard_audit_logs');
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return [];
+  });
+
+  const handleClearBatchSelection = () => {
+    setSelectedItemIds({});
+  };
+
+  // 5. Accounting & Inventory Report Export Modal
+  const [showExportModal, setShowExportModal] = useState<boolean>(false);
+
+  // 6. Tools & Actions Dropdown (Far Left)
+  const [isToolsDropdownOpen, setIsToolsDropdownOpen] = useState<boolean>(false);
+  const toolsDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (toolsDropdownRef.current && !toolsDropdownRef.current.contains(event.target as Node)) {
+        setIsToolsDropdownOpen(false);
+      }
+    };
+    if (isToolsDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isToolsDropdownOpen]);
+
+  // 7. Quick Note Tags Popover
+  const [activeNoteTagItemId, setActiveNoteTagItemId] = useState<string | null>(null);
+
+  // Quick note preset tags
+  const QUICK_NOTE_TAGS = [
+    '📦 تلف في التعبئة والكرتون',
+    '⚠️ نقص في محتويات الطرد',
+    '🔍 تم فتح الكرتون والفحص',
+    '⏳ بانتظار تعليمات الكفيل',
+    '✅ طرود سليمة ومغلفة بالكامل',
+    '🏷️ ملصق الكود غير واضح'
+  ];
 
   // Synchronize batchEntryDate when selectedShipment changes
   useEffect(() => {
@@ -656,6 +741,25 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
   const syncItemUpdate = async (item: ShipmentRecord, actionText: string, changes: any) => {
     const time = toLatinDigits(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
     
+    // Save to local audit logs
+    const newLog: YardAuditLog = {
+      id: 'log_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      itemId: item.id,
+      code: item.code,
+      clientName: item.name,
+      shipment: item.shipment,
+      userName: currentUserName,
+      action: actionText,
+      timestamp: `${toLatinDigits(new Date().toISOString().slice(0, 10))} ${time}`
+    };
+    setAuditLogs(prev => {
+      const updated = [newLog, ...prev.slice(0, 199)];
+      try {
+        localStorage.setItem('atlas_yard_audit_logs', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+
     // Broadcast locally between tabs
     try {
       const bc = new BroadcastChannel('atlas_yard_sync_channel');
@@ -877,7 +981,18 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
     return () => clearTimeout(t);
   }, [activeAlert]);
 
-  // 3. Computed items
+  // Unique list of guarantors for advanced filtering
+  const availableGuarantors = useMemo(() => {
+    const set = new Set<string>();
+    shipments.forEach(s => {
+      if (s.guarantor && s.guarantor.trim()) {
+        set.add(s.guarantor.trim());
+      }
+    });
+    return Array.from(set).sort();
+  }, [shipments]);
+
+  // 3. Computed items with Advanced Filtering (Guarantor & Financial Status)
   const baseItems = useMemo(() => {
     return shipments.filter(s => {
       // Freight type filtering
@@ -900,9 +1015,24 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
         s.city.toLowerCase().includes(searchQuery.toLowerCase()) ||
         (s.guarantor && s.guarantor.toLowerCase().includes(searchQuery.toLowerCase())) ||
         (s.address && s.address.toLowerCase().includes(searchQuery.toLowerCase()));
-      return matchShip && matchSearch;
+
+      // Filter by Guarantor / Responsible employee
+      const matchGuarantor = selectedGuarantor === 'الكل' || (s.guarantor && s.guarantor.trim() === selectedGuarantor.trim());
+
+      // Filter by Financial Status
+      let matchFinancial = true;
+      const amount = Number(s.sales || 0);
+      if (financialFilter === 'with_debt') {
+        matchFinancial = amount > 0;
+      } else if (financialFilter === 'zero_debt') {
+        matchFinancial = amount === 0;
+      } else if (financialFilter === 'high_debt') {
+        matchFinancial = amount >= 500;
+      }
+
+      return matchShip && matchSearch && matchGuarantor && matchFinancial;
     });
-  }, [shipments, selectedShipment, searchQuery, freightType]);
+  }, [shipments, selectedShipment, searchQuery, freightType, selectedGuarantor, financialFilter]);
 
   // Calculate days in yard with live entryDate support
   const getItemDays = (s: ShipmentRecord) => {
@@ -956,6 +1086,365 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
       return true;
     });
   }, [baseItems, filterStatus, checkedItems, actualCounts, dispatchedItems, entryDates]);
+
+  // Financial KPIs & Visual Summary Calculations
+  const totalFilteredSales = useMemo(() => {
+    return filteredItems.reduce((sum, item) => sum + (Number(item.sales) || 0), 0);
+  }, [filteredItems]);
+
+  const totalShipmentSales = useMemo(() => {
+    return baseItems.reduce((sum, item) => sum + (Number(item.sales) || 0), 0);
+  }, [baseItems]);
+
+  const dispatchedSales = useMemo(() => {
+    return filteredItems
+      .filter(item => !!dispatchedItems[item.id]?.dispatched)
+      .reduce((sum, item) => sum + (Number(item.sales) || 0), 0);
+  }, [filteredItems, dispatchedItems]);
+
+  const remainingInYardSales = Math.max(0, totalFilteredSales - dispatchedSales);
+
+  const healthyItemsCount = useMemo(() => {
+    return filteredItems.filter(item => {
+      const isChecked = !!checkedItems[item.id];
+      const act = actualCounts[item.id];
+      const hasActual = act !== undefined && act !== '';
+      const isMismatch = hasActual && Number(act) !== item.packages;
+      return isChecked && !isMismatch;
+    }).length;
+  }, [filteredItems, checkedItems, actualCounts]);
+
+  const clientsWithDebtsCount = useMemo(() => {
+    return filteredItems.filter(item => Number(item.sales || 0) > 0).length;
+  }, [filteredItems]);
+
+  const healthyPercentage = filteredItems.length > 0 
+    ? Math.round((healthyItemsCount / filteredItems.length) * 100) 
+    : 0;
+
+  const mismatchPercentage = filteredItems.length > 0 
+    ? Math.round((mismatchItemsCount / filteredItems.length) * 100) 
+    : 0;
+
+  const dispatchedSalesRate = totalFilteredSales > 0
+    ? Math.round((dispatchedSales / totalFilteredSales) * 100)
+    : 0;
+
+  // Selected Count for Batch Actions
+  const selectedCount = useMemo(() => {
+    return Object.keys(selectedItemIds).filter(id => selectedItemIds[id]).length;
+  }, [selectedItemIds]);
+
+  const handleSelectAllVisible = (check: boolean) => {
+    const updated: Record<string, boolean> = {};
+    if (check) {
+      filteredItems.forEach(item => {
+        updated[item.id] = true;
+      });
+    }
+    setSelectedItemIds(updated);
+  };
+
+  const handleToggleSelectOne = (id: string) => {
+    setSelectedItemIds(prev => ({
+      ...prev,
+      [id]: !prev[id]
+    }));
+  };
+
+  // Batch Action 1: Approve Audit and Match for all selected
+  const handleBatchApproveAudit = () => {
+    const selectedList = filteredItems.filter(it => selectedItemIds[it.id]);
+    if (selectedList.length === 0) return;
+
+    const newChecks = { ...checkedItems };
+    const newCounts = { ...actualCounts };
+
+    selectedList.forEach(item => {
+      newChecks[item.id] = true;
+      newCounts[item.id] = item.packages;
+    });
+
+    setCheckedItems(newChecks);
+    setActualCounts(newCounts);
+    setSelectedItemIds({});
+
+    const actionText = `اعتماد تدقيق ومطابقة جماعية لـ (${selectedList.length}) طرد بنجاح`;
+    setToastMessage(`✅ ${actionText}`);
+
+    fetch('/api/yard-inventory/save-all', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        deviceId,
+        userName: currentUserName,
+        checkedItems: newChecks,
+        actualCounts: newCounts,
+        action: actionText
+      })
+    }).catch(() => {});
+  };
+
+  // Batch Action 2: Mark Yard Dispatch for all selected
+  const handleBatchMarkDispatch = () => {
+    const selectedList = filteredItems.filter(it => selectedItemIds[it.id]);
+    if (selectedList.length === 0) return;
+
+    const now = new Date();
+    const timeStr = toLatinDigits(now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    const dateStr = toLatinDigits(now.toISOString().slice(0, 10));
+    const fullDateTime = `${dateStr} ${timeStr}`;
+
+    const newDispatched = { ...dispatchedItems };
+    selectedList.forEach(item => {
+      newDispatched[item.id] = {
+        dispatched: true,
+        time: timeStr,
+        date: dateStr,
+        fullDateTime,
+        user: currentUserName
+      };
+    });
+
+    setDispatchedItems(newDispatched);
+    setSelectedItemIds({});
+
+    const actionText = `تسجيل إشارة إخراج جماعية لـ (${selectedList.length}) طرد في [${fullDateTime}]`;
+    setToastMessage(`🚚 ${actionText}`);
+
+    fetch('/api/yard-inventory/save-all', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        deviceId,
+        userName: currentUserName,
+        dispatchedItems: newDispatched,
+        action: actionText
+      })
+    }).catch(() => {});
+  };
+
+  // Batch Action 3: Apply Entry Date to Selected Items
+  const handleBatchApplyDateToSelected = (dateToApply: string) => {
+    const selectedList = filteredItems.filter(it => selectedItemIds[it.id]);
+    if (selectedList.length === 0 || !dateToApply) return;
+
+    const updatedEntryDates: Record<string, string> = { ...entryDates };
+    selectedList.forEach(item => {
+      updatedEntryDates[item.id] = dateToApply;
+    });
+
+    setEntryDates(updatedEntryDates);
+    setSelectedItemIds({});
+
+    const actionText = `تطبيق تاريخ دخول (${dateToApply}) على (${selectedList.length}) طرد محدد`;
+    setToastMessage(`📅 ${actionText}`);
+
+    fetch('/api/yard-inventory/batch-entry-date', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        deviceId,
+        userName: currentUserName,
+        entryDate: dateToApply,
+        itemIds: selectedList.map(it => it.id),
+        action: actionText
+      })
+    }).catch(() => {});
+  };
+
+  // Generate Smart Pre-formatted Notification Messages for Clients
+  const getPreformattedMessage = (item: ShipmentRecord, type: 'ready' | 'overdue' | 'mismatch' | 'debt'): string => {
+    const cleanPhone = (item.phone || item.phone2 || '').trim();
+    const itemEntry = entryDates[item.id] || getDefaultEntryDate(item);
+    const days = calculateDaysInYard(itemEntry, item);
+    const actual = actualCounts[item.id] !== undefined && actualCounts[item.id] !== '' ? actualCounts[item.id] : item.packages;
+    const debt = Number(item.sales || 0);
+
+    if (type === 'ready') {
+      return `السلام عليكم ورحمة الله وبركاته، الأخ الكريم / ${item.name} المحترم.\nتحية طيبة من شركة أطلس المحيط للشحن الدولي والتخليص الجمركي 🚢✈️.\n\nيسرنا إعلامكم بأن بضاعتكم شحنة [${item.shipment}] بالكود [${item.code}] بعدد (${item.packages} طرد) جاهزة ومفحوصة للاستلام في ساحة ومستودع الشركة.\nالمبلغ المستحق: $${debt.toLocaleString()}\nالعنوان: ${item.address || item.city}\n\nيرجى التفضل بالحضور للاستلام، مع خالص التقدير.`;
+    }
+
+    if (type === 'overdue') {
+      return `تنبيه ومتابعة بضاعة في الساحة - شركة أطلس المحيط.\nالأخ الكريم / ${item.name} المحترم (الكود: ${item.code}).\n\nنود لفت عنايتكم الكريمة إلى أن بضاعتكم في شحنة [${item.shipment}] بعدد (${item.packages} طرد) متواجدة في ساحة الشركة منذ (${days} أيام).\nنرجو التكرم بالتنسيق واستلام البضاعة بأقرب وقت لتفادي أي رسوم تخزين إضافية.\nالمبلغ المستحق: $${debt.toLocaleString()}\nللتواصل والاستفسار يرجى الرد على هذه الرسالة. شكراً لتعاونكم.`;
+    }
+
+    if (type === 'mismatch') {
+      const diff = Number(actual) - item.packages;
+      const note = itemNotes[item.id] || '';
+      return `إشعار تدقيق وجرد الساحة - شركة أطلس المحيط.\nالأخ الكريم / ${item.name} المحترم (الكود: ${item.code}).\n\nنحيطكم علماً بأنه تم إجراء الجرد والتدقيق الفعلي لشحنتكم [${item.shipment}]:\n- الطرود المقيدة بالمنفيست: (${item.packages}) طرد\n- الطرود المحصورة فعلياً بالساحة: (${actual}) طرد ${diff !== 0 ? `(يوجد فرق: ${diff > 0 ? `+${diff}` : diff})` : '(مطابقة)'}\n${note ? `- ملاحظة الجرد: ${note}\n` : ''}\nيرجى التنسيق مع مسؤول الساحة أو الكفيل [${item.guarantor || 'الإدارة'}].`;
+    }
+
+    // debt
+    return `تذكير بالمطالبة المالية - شركة أطلس المحيط.\nالأخ الكريم / ${item.name} المحترم (الكود: ${item.code}).\n\nنرجو التكرم بالعلم بأن المبلغ المستحق على شحنتكم [${item.shipment}] بعدد (${item.packages} طرد) هو: $${debt.toLocaleString()}.\nيرجى تسديد المبلغ عند الاستلام أو التنسيق مع القسم المالي.\nشاكرين ومقدرين حسن تعاملكم.`;
+  };
+
+  // Set message text when opening client message modal or changing template
+  useEffect(() => {
+    if (activeMessageClient) {
+      setCustomMessageText(getPreformattedMessage(activeMessageClient, messageTemplate));
+    }
+  }, [activeMessageClient, messageTemplate]);
+
+  // Clean phone number for WhatsApp
+  const getCleanWhatsAppPhone = (rawPhone?: string): string => {
+    if (!rawPhone) return '';
+    let digits = rawPhone.replace(/\D/g, '');
+    if (digits.startsWith('00')) digits = digits.slice(2);
+    if (digits.startsWith('07')) digits = '964' + digits.slice(1);
+    if (digits.startsWith('7') && digits.length === 10) digits = '964' + digits;
+    return digits;
+  };
+
+  // Print Accounting Audit Report (PDF/A4)
+  const handlePrintAccountingReport = () => {
+    const printWindow = window.open('', '_blank', 'height=950,width=850');
+    if (!printWindow) {
+      window.print();
+      return;
+    }
+
+    const tableRows = filteredItems.map((item, idx) => {
+      const act = actualCounts[item.id];
+      const hasActual = act !== undefined && act !== '';
+      const isChecked = !!checkedItems[item.id];
+      const note = itemNotes[item.id] || '';
+      const displayActual = hasActual ? act : item.packages;
+      const diff = Number(displayActual) - item.packages;
+      const isMismatch = hasActual && diff !== 0;
+      const isDispatched = !!dispatchedItems[item.id]?.dispatched;
+      const itemEntry = entryDates[item.id] || getDefaultEntryDate(item);
+      const days = calculateDaysInYard(itemEntry, item);
+
+      return `
+        <tr style="${isMismatch ? 'background-color: #fff1f2;' : (isChecked ? 'background-color: #f0fdf4;' : '')}">
+          <td style="text-align: center; font-weight: bold;">${idx + 1}</td>
+          <td style="font-weight: bold; font-family: monospace; color: #b45309;">${item.code}</td>
+          <td style="text-align: center; font-weight: 800; color: #047857; font-family: monospace;">$${Number(item.sales || 0).toLocaleString()}</td>
+          <td style="font-size: 10px;">${item.guarantor || '—'}</td>
+          <td>
+            <b>${item.name}</b>
+            <div style="font-size: 9.5px; color: #64748b;">${item.phone || ''} | ${item.city || ''}</div>
+            ${note ? `<div style="font-size: 9.5px; color: #991b1b; font-weight: bold; margin-top: 2px;">⚠️ ${note}</div>` : ''}
+          </td>
+          <td style="text-align: center; font-weight: bold;">${item.packages}</td>
+          <td style="text-align: center; font-weight: bold; font-family: monospace; ${isMismatch ? 'color: #dc2626;' : 'color: #166534;'}">
+            ${displayActual}
+          </td>
+          <td style="text-align: center; font-size: 10px; font-weight: bold;">
+            ${isMismatch ? `<span style="color: #b91c1c;">فرق (${diff > 0 ? `+${diff}` : diff})</span>` : (isChecked ? '<span style="color: #15803d;">مطابق ومفحوص</span>' : '<span style="color: #64748b;">قيد الجرد</span>')}
+          </td>
+          <td style="text-align: center; font-size: 10px; font-family: monospace;">
+            ${itemEntry} (${days} يوم)
+          </td>
+          <td style="text-align: center; font-size: 10px; font-weight: bold;">
+            ${isDispatched ? '<span style="color: #0d9488;">تم الإخراج</span>' : '<span style="color: #334155;">بالساحة</span>'}
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html lang="ar" dir="rtl">
+      <head>
+        <meta charset="UTF-8">
+        <title>تقرير جرد الساحة والتدقيق المحاسبي - ${COMPANY_INFO.shortNameAr}</title>
+        <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap" rel="stylesheet">
+        <style>
+          @page { size: A4 landscape; margin: 8mm; }
+          * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+          body { font-family: 'Cairo', Tahoma, Arial, sans-serif; direction: rtl; color: #0f172a; padding: 5px; margin: 0; }
+          .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #0f172a; padding-bottom: 8px; margin-bottom: 10px; }
+          h2 { margin: 0; font-size: 17px; color: #0f172a; }
+          .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
+          .kpi-card { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 6px 10px; text-align: center; }
+          .kpi-title { font-size: 10px; color: #64748b; font-weight: bold; }
+          .kpi-val { font-size: 13px; font-weight: 800; color: #0f172a; font-family: monospace; margin-top: 2px; }
+          table { width: 100%; border-collapse: collapse; font-size: 10px; margin-top: 5px; }
+          th, td { padding: 5px 6px; border: 1px solid #cbd5e1; text-align: right; }
+          th { background-color: #1e293b !important; color: #ffffff !important; font-weight: bold; font-size: 10px; }
+          tr:nth-child(even) { background-color: #f8fafc; }
+          .footer-signs { margin-top: 28px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; text-align: center; font-size: 11px; font-weight: bold; }
+          .sign-line { margin-top: 35px; border-top: 1px dashed #94a3b8; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div>
+            <h2>${COMPANY_INFO.nameAr}</h2>
+            <div style="font-size: 11px; color: #64748b; font-weight: bold; margin-top: 2px;">
+              تقرير جرد الساحة والتدقيق المحاسبي المعتمد - الشحنة: [${selectedShipment}] (${freightType === 'sea' ? 'بحري' : freightType === 'air' ? 'جوي' : 'عام'})
+            </div>
+          </div>
+          <div style="text-align: left; font-size: 10px; color: #475569;">
+            <div>تاريخ التقرير: <b>${new Date().toLocaleDateString('ar-IQ')}</b></div>
+            <div>اسم المدقق: <b>${currentUserName}</b></div>
+          </div>
+        </div>
+
+        <div class="kpi-grid">
+          <div class="kpi-card">
+            <div class="kpi-title">إجمالي المبالغ والديون ($)</div>
+            <div class="kpi-val" style="color: #047857;">$${totalFilteredSales.toLocaleString()}</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-title">المبالغ المحصلة / المخرجة ($)</div>
+            <div class="kpi-val" style="color: #0284c7;">$${dispatchedSales.toLocaleString()}</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-title">الديون المتبقية بالساحة ($)</div>
+            <div class="kpi-val" style="color: #b45309;">$${remainingInYardSales.toLocaleString()}</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-title">إجمالي الطرود المقيدة / الفعلية</div>
+            <div class="kpi-val">${totalExpectedPackages} / ${totalActualPackages} (فروقات: ${mismatchItemsCount})</div>
+          </div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 4%; text-align: center;">#</th>
+              <th style="width: 10%;">كود العميل</th>
+              <th style="width: 11%; text-align: center;">المبلغ ($)</th>
+              <th style="width: 10%;">الكفيل</th>
+              <th style="width: 27%;">العميل والعنوان وملاحظات الساحة</th>
+              <th style="width: 7%; text-align: center;">الطرود</th>
+              <th style="width: 7%; text-align: center;">الفعلي</th>
+              <th style="width: 8%; text-align: center;">المطابقة</th>
+              <th style="width: 9%; text-align: center;">تاريخ الدخول</th>
+              <th style="width: 7%; text-align: center;">الإخراج</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tableRows}
+          </tbody>
+        </table>
+
+        <div class="footer-signs">
+          <div>
+            مسؤول الساحة والجرد
+            <div class="sign-line">التوقيع والختم</div>
+          </div>
+          <div>
+            مدقق الحسابات والمطابقة
+            <div class="sign-line">التوقيع والختم</div>
+          </div>
+          <div>
+            إدارة الحركة واللوجستيك
+            <div class="sign-line">الاعتماد النهائي</div>
+          </div>
+        </div>
+      </body>
+      </html>
+    `);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => {
+      printWindow.print();
+    }, 450);
+  };
 
   const totalExpectedPackages = baseItems.reduce((sum, s) => sum + s.packages, 0);
   const totalActualPackages = baseItems.reduce((sum, s) => {
@@ -1317,71 +1806,9 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
             </div>
           </div>
 
-          {/* Core Action Buttons with Prominent "حفظ مؤقت والعودة لاحقاً" */}
-          <div className="flex flex-wrap items-center gap-2 w-full xl:w-auto justify-start xl:justify-end">
-            {/* Audio Toggle Button */}
-            <button
-              onClick={() => {
-                const next = !soundEnabled;
-                setSoundEnabled(next);
-                localStorage.setItem('atlas_yard_sound_enabled', String(next));
-                if (next) playChimeSound();
-              }}
-              className={`p-2.5 rounded-xl border font-bold text-xs transition-colors cursor-pointer flex items-center gap-1 ${
-                soundEnabled 
-                  ? 'bg-slate-100 hover:bg-slate-200 text-emerald-700 border-slate-300' 
-                  : 'bg-rose-50 hover:bg-rose-100 text-rose-600 border-rose-200'
-              }`}
-              title={soundEnabled ? 'صوت التنبيهات مفعّل (نغمة هادئة عند تحديث أي جهاز) - انقر للكتم' : 'صوت التنبيهات مكتوم - انقر للتفعيل'}
-            >
-              {soundEnabled ? <Volume2 className="w-4 h-4 text-emerald-600" /> : <VolumeX className="w-4 h-4 text-rose-500" />}
-            </button>
-
-            {/* Teammate Simulation Button */}
-            <button
-              onClick={handleSimulateRemoteUpdate}
-              disabled={isSimulating}
-              className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-950 border border-amber-300 font-bold text-xs transition-all cursor-pointer shadow-xs"
-              title="محاكاة إجراء تعديل فوري من قبل زميل في الفريق على جهاز آخر لاختبار الإشعارات المباشرة"
-            >
-              {isSimulating ? (
-                <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-700" />
-              ) : (
-                <Radio className="w-3.5 h-3.5 text-amber-600 animate-pulse" />
-              )}
-              <span>تجربة تنبيه من جهاز آخر</span>
-            </button>
-
-            {/* Team Alerts Log Button */}
-            <button
-              onClick={() => setShowAlertsDrawer(!showAlertsDrawer)}
-              className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-400 border border-slate-700 font-bold text-xs transition-all cursor-pointer shadow-xs relative"
-              title="عرض سجل التنبيهات الفورية والتفاعلية للفريق"
-            >
-              <Bell className="w-4 h-4 text-amber-400" />
-              <span>تنبيهات الفريق ({teamAlerts.length})</span>
-            </button>
-
-            {/* Dispatch synchronization button: activated only when yard exit is marked (Directive #7) */}
-            <button
-              onClick={handleConfirmDispatchedSync}
-              disabled={dispatchedItemsCount === 0}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-extrabold text-xs transition-all active:scale-95 cursor-pointer shadow-md ${
-                dispatchedItemsCount > 0
-                  ? 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 ring-2 ring-amber-400 shadow-amber-500/25 animate-pulse'
-                  : 'bg-slate-800/40 text-slate-500 border border-slate-700/60 opacity-40 cursor-not-allowed'
-              }`}
-              title={
-                dispatchedItemsCount > 0
-                  ? `حفظ ومزامنة عمليات الإخراج المحددة (${dispatchedItemsCount} طرد)`
-                  : 'يتفعل هذا الزر فقط عند النقر على إشارة إخراج الساحة للبضائع'
-              }
-            >
-              <Truck className="w-4 h-4 stroke-[2.2]" />
-              <span>حفظ ومزامنة عمليات الإخراج ({dispatchedItemsCount})</span>
-            </button>
-
-            {/* Primary Action Button */}
+          {/* Actions & Tools Bar - Far Left (أقصى اليسار) */}
+          <div className="flex items-center gap-2.5 w-full xl:w-auto justify-start xl:justify-end">
+            {/* Primary Instant Save Button */}
             <button
               onClick={handleSaveAndReturnLater}
               className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white font-extrabold text-xs shadow-md shadow-emerald-700/20 active:scale-95 transition-all cursor-pointer"
@@ -1391,34 +1818,320 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
               <span>حفظ ومزامنة الجرد</span>
             </button>
 
-            {/* Print A4 Sheet */}
-            <button
-              onClick={handlePrint}
-              className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-md shadow-amber-500/20 active:scale-95 transition-all cursor-pointer"
-            >
-              <Printer className="w-4 h-4 stroke-[2.2]" />
-              <span>طباعة ورقة الجرد (A4)</span>
-            </button>
+            {/* Comprehensive Tools & Actions Dropdown (أقصى اليسار) */}
+            <div className="relative" ref={toolsDropdownRef}>
+              <button
+                id="yard-tools-dropdown-toggle-btn"
+                type="button"
+                onClick={() => setIsToolsDropdownOpen(prev => !prev)}
+                className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl font-bold text-xs shadow-sm border transition-all cursor-pointer select-none ${
+                  isToolsDropdownOpen
+                    ? 'bg-slate-900 text-amber-400 border-slate-900 ring-2 ring-amber-400/40'
+                    : 'bg-slate-800 hover:bg-slate-700 text-amber-300 border-slate-700'
+                }`}
+                title="قائمة أدوات وإجراءات الساحة المجمعة (التقارير، التصدير، سجل التدقيق، تنبيهات الفريق، والصوت)"
+              >
+                <SlidersHorizontal className="w-4 h-4 text-amber-400" />
+                <span>أدوات وإجراءات الساحة</span>
+                {dispatchedItemsCount > 0 ? (
+                  <span className="bg-amber-500 text-slate-950 text-[10px] font-black px-1.5 py-0.5 rounded-full animate-pulse">
+                    {dispatchedItemsCount}
+                  </span>
+                ) : teamAlerts.length > 0 ? (
+                  <span className="bg-slate-700 text-amber-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                    {teamAlerts.length}
+                  </span>
+                ) : null}
+                <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${isToolsDropdownOpen ? 'rotate-180' : ''}`} />
+              </button>
 
-            {/* Export Excel with Actual Counts & Notes */}
-            <button
-              onClick={() => exportYardInventoryToExcel(filteredItems, selectedShipment, actualCounts, checkedItems, itemNotes)}
-              className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700 font-semibold text-xs transition-colors cursor-pointer"
-              title="تصدير شيت الجرد مع الأرقام الفعلية والمطابقات وملاحظات الساحة إلى ملف إكسل"
-            >
-              <FileSpreadsheet className="w-4 h-4" />
-              <span>تصدير إكسل</span>
-            </button>
+              {/* Dropdown Menu Panel */}
+              {isToolsDropdownOpen && (
+                <div
+                  id="yard-tools-dropdown-content"
+                  className="absolute left-0 mt-2 w-80 sm:w-88 bg-white rounded-2xl shadow-2xl border border-slate-200 z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150"
+                  style={{ maxHeight: '85vh', overflowY: 'auto' }}
+                >
+                  {/* Header of Dropdown */}
+                  <div className="px-4 py-3 bg-gradient-to-r from-slate-900 to-slate-800 text-white flex items-center justify-between border-b border-slate-700">
+                    <div className="flex items-center gap-2">
+                      <div className="p-1.5 rounded-lg bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                        <SlidersHorizontal className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="font-extrabold text-xs text-white">أدوات وإجراءات الساحة</div>
+                        <div className="text-[10px] text-slate-400">كافة العمليات والتقارير والتدقيق</div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsToolsDropdownOpen(false)}
+                      className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700 transition-colors cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
 
-            {/* Reset Draft */}
-            <button
-              onClick={() => setResetConfirmOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-700 border border-slate-200 hover:border-rose-300 font-semibold text-xs transition-colors cursor-pointer"
-              title="إعادة ضبط المسودة وتفريغ الإدخالات لهذه الشحنة"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>تفريغ المسودة</span>
-            </button>
+                  <div className="p-2 space-y-3 divide-y divide-slate-100">
+                    {/* Section 1: Core Operations & Export */}
+                    <div className="space-y-1 pt-1">
+                      <div className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                        العمليات والمزامنة والتقارير
+                      </div>
+
+                      {/* 1. Save & Sync */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsToolsDropdownOpen(false);
+                          handleSaveAndReturnLater();
+                        }}
+                        className="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-emerald-50 text-slate-700 hover:text-emerald-950 transition-colors text-right cursor-pointer group"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                            <Save className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-slate-900 group-hover:text-emerald-950">حفظ ومزامنة الجرد</div>
+                            <div className="text-[10px] text-slate-500">مزامنة فورية مع السيرفر والأجهزة</div>
+                          </div>
+                        </div>
+                      </button>
+
+                      {/* 2. Dispatch Sync */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (dispatchedItemsCount > 0) {
+                            setIsToolsDropdownOpen(false);
+                            handleConfirmDispatchedSync();
+                          }
+                        }}
+                        disabled={dispatchedItemsCount === 0}
+                        className={`w-full flex items-center justify-between p-2.5 rounded-xl transition-colors text-right cursor-pointer group ${
+                          dispatchedItemsCount > 0
+                            ? 'hover:bg-amber-50 text-slate-900'
+                            : 'opacity-50 cursor-not-allowed text-slate-400'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                            dispatchedItemsCount > 0 ? 'bg-amber-100 text-amber-700 group-hover:scale-105 transition-transform' : 'bg-slate-100 text-slate-400'
+                          }`}>
+                            <Truck className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold">حفظ ومزامنة عمليات الإخراج</div>
+                            <div className="text-[10px] text-slate-500">
+                              {dispatchedItemsCount > 0 ? `${dispatchedItemsCount} طرد محدد للإخراج` : 'اضغط إشارة إخراج لأي طرد لتفعيله'}
+                            </div>
+                          </div>
+                        </div>
+                        {dispatchedItemsCount > 0 && (
+                          <span className="px-2 py-0.5 rounded-full bg-amber-500 text-slate-950 font-black text-xs">
+                            {dispatchedItemsCount}
+                          </span>
+                        )}
+                      </button>
+
+                      {/* 3. Export Accounting Report Modal */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsToolsDropdownOpen(false);
+                          setShowExportModal(true);
+                        }}
+                        className="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-blue-50 text-slate-700 hover:text-blue-950 transition-colors text-right cursor-pointer group"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                            <FileText className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-slate-900 group-hover:text-blue-950">تقرير الجرد والتدقيق (PDF/Excel)</div>
+                            <div className="text-[10px] text-slate-500">طباعة رسمية A4 أو ملف معتمد مع الفروقات</div>
+                          </div>
+                        </div>
+                      </button>
+
+                      {/* 4. Quick Tally Sheet Print */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsToolsDropdownOpen(false);
+                          handlePrint();
+                        }}
+                        className="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-amber-50 text-slate-700 hover:text-amber-950 transition-colors text-right cursor-pointer group"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-800 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                            <Printer className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-slate-900 group-hover:text-amber-950">ورقة الجرد السريعة</div>
+                            <div className="text-[10px] text-slate-500">طباعة فورية لشيت التدقيق اليدوي في الساحة</div>
+                          </div>
+                        </div>
+                      </button>
+
+                      {/* 5. Export Excel */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsToolsDropdownOpen(false);
+                          exportYardInventoryToExcel(filteredItems, selectedShipment, actualCounts, checkedItems, itemNotes);
+                        }}
+                        className="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-emerald-50 text-slate-700 hover:text-emerald-950 transition-colors text-right cursor-pointer group"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-800 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                            <FileSpreadsheet className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-slate-900 group-hover:text-emerald-950">تصدير إكسل (Excel)</div>
+                            <div className="text-[10px] text-slate-500">تحميل ملف إكسل مع الأرقام الفعلية والملاحظات</div>
+                          </div>
+                        </div>
+                      </button>
+                    </div>
+
+                    {/* Section 2: Audit & Real-time Collaboration */}
+                    <div className="space-y-1 pt-2">
+                      <div className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                        التدقيق والربط اللحظي للفريق
+                      </div>
+
+                      {/* 6. General Audit Trail */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsToolsDropdownOpen(false);
+                          setShowFullAuditModal(true);
+                        }}
+                        className="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-amber-50 text-slate-700 hover:text-amber-950 transition-colors text-right cursor-pointer group"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                            <History className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-slate-900 group-hover:text-amber-950">سجل التدقيق والتتبع</div>
+                            <div className="text-[10px] text-slate-500">سجل كامل للحركات وتعديلات المستخدمين</div>
+                          </div>
+                        </div>
+                      </button>
+
+                      {/* 7. Team Alerts Drawer */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsToolsDropdownOpen(false);
+                          setShowAlertsDrawer(!showAlertsDrawer);
+                        }}
+                        className="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-100 text-slate-700 hover:text-slate-950 transition-colors text-right cursor-pointer group"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-lg bg-slate-800 text-amber-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                            <Bell className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-slate-900">تنبيهات الفريق اللحظية</div>
+                            <div className="text-[10px] text-slate-500">درج التنبيهات المباشرة بين الأجهزة</div>
+                          </div>
+                        </div>
+                        <span className="px-2 py-0.5 rounded-full bg-slate-200 text-slate-800 font-bold text-[11px]">
+                          {teamAlerts.length}
+                        </span>
+                      </button>
+
+                      {/* 8. Teammate Simulation */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsToolsDropdownOpen(false);
+                          handleSimulateRemoteUpdate();
+                        }}
+                        disabled={isSimulating}
+                        className="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-amber-50 text-slate-700 hover:text-amber-950 transition-colors text-right cursor-pointer group"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-800 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                            {isSimulating ? (
+                              <RefreshCw className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <Radio className="w-4 h-4" />
+                            )}
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-slate-900 group-hover:text-amber-950">تجربة تنبيه من جهاز آخر</div>
+                            <div className="text-[10px] text-slate-500">محاكاة تعديل فوري واختبار الإشعار الصوتي</div>
+                          </div>
+                        </div>
+                      </button>
+
+                      {/* 9. Sound Toggle */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const next = !soundEnabled;
+                          setSoundEnabled(next);
+                          localStorage.setItem('atlas_yard_sound_enabled', String(next));
+                          if (next) playChimeSound();
+                        }}
+                        className="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-50 text-slate-700 transition-colors text-right cursor-pointer group"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                            soundEnabled ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-600'
+                          }`}>
+                            {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-slate-900">
+                              صوت التنبيهات: {soundEnabled ? 'مفعّل' : 'مكتوم'}
+                            </div>
+                            <div className="text-[10px] text-slate-500">نغمة صوتية هادئة عند تحديث أي جهاز</div>
+                          </div>
+                        </div>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
+                          soundEnabled ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                        }`}>
+                          {soundEnabled ? 'انقر للكتم' : 'انقر للتفعيل'}
+                        </span>
+                      </button>
+                    </div>
+
+                    {/* Section 3: Reset & Maintenance */}
+                    <div className="space-y-1 pt-2">
+                      <div className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                        خيارات وإعادة الضبط
+                      </div>
+
+                      {/* 10. Reset Draft */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsToolsDropdownOpen(false);
+                          setResetConfirmOpen(true);
+                        }}
+                        className="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-rose-50 text-slate-700 hover:text-rose-700 transition-colors text-right cursor-pointer group"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-lg bg-rose-100 text-rose-600 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                            <RotateCcw className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-slate-900 group-hover:text-rose-700">تفريغ المسودة وإعادة الضبط</div>
+                            <div className="text-[10px] text-slate-500">مسح المدخلات غير المحفوظة لهذه الشحنة</div>
+                          </div>
+                        </div>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -1456,6 +2169,151 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                   'المتصفح جاهز للحفظ'
                 )}
               </span>
+            </div>
+          </div>
+        </div>
+
+        {/* 🌟 مؤشرات الأداء المالي والإحصائي (KPIs & Financial Summary) */}
+        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 font-['Cairo']">
+          {/* Card 1: إجمالي المبالغ والديون المستحقة المعروضة */}
+          <div className="bg-gradient-to-br from-slate-900 to-slate-800 text-white rounded-xl p-3.5 border border-slate-700 shadow-sm relative overflow-hidden">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold text-amber-400 flex items-center gap-1">
+                <Wallet className="w-3.5 h-3.5" />
+                <span>إجمالي مبالغ البنود المعروضة ($)</span>
+              </span>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700 font-mono">
+                {filteredItems.length} بند
+              </span>
+            </div>
+            <div className="mt-2 flex items-baseline gap-2">
+              <span className="text-2xl font-black font-mono text-emerald-400">
+                ${totalFilteredSales.toLocaleString()}
+              </span>
+              {selectedShipment !== 'الكل' && totalShipmentSales > totalFilteredSales && (
+                <span className="text-[10px] text-slate-400">
+                  من أصل <b className="font-mono">${totalShipmentSales.toLocaleString()}</b>
+                </span>
+              )}
+            </div>
+            <div className="mt-2 text-[10px] text-slate-300 flex items-center justify-between border-t border-slate-700/80 pt-1.5">
+              <span>عملاء عليهم مستحقات مالية:</span>
+              <span className="font-bold text-amber-300 font-mono">{clientsWithDebtsCount} عميل</span>
+            </div>
+          </div>
+
+          {/* Card 2: المبالغ المحصلة (المُخرجة) مقابل المتبقية بالساحة */}
+          <div className="bg-white rounded-xl p-3.5 border border-slate-200 shadow-xs flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between text-slate-600 text-[11px] font-bold">
+                <span className="flex items-center gap-1">
+                  <TrendingUp className="w-3.5 h-3.5 text-cyan-600" />
+                  <span>المحصل (المُخرج) مقابل المتبقي</span>
+                </span>
+                <span className="font-mono text-cyan-700 font-extrabold text-[11px]">
+                  {dispatchedSalesRate}% تم إخراجه
+                </span>
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-2 text-center">
+                <div className="bg-cyan-50/70 p-1.5 rounded-lg border border-cyan-200/60">
+                  <div className="text-[10px] text-cyan-800 font-bold">تم إخراجه / محصل</div>
+                  <div className="text-sm font-black font-mono text-cyan-900">${dispatchedSales.toLocaleString()}</div>
+                </div>
+                <div className="bg-amber-50/70 p-1.5 rounded-lg border border-amber-200/60">
+                  <div className="text-[10px] text-amber-800 font-bold">متبقي في الساحة</div>
+                  <div className="text-sm font-black font-mono text-amber-950">${remainingInYardSales.toLocaleString()}</div>
+                </div>
+              </div>
+            </div>
+            {/* Dual visual progress bar */}
+            <div className="w-full bg-amber-100 rounded-full h-2 mt-2.5 overflow-hidden flex shadow-inner">
+              <div 
+                className="bg-cyan-600 h-full transition-all duration-500" 
+                style={{ width: `${dispatchedSalesRate}%` }} 
+                title={`المبالغ المخرجة: ${dispatchedSalesRate}%`}
+              />
+              <div 
+                className="bg-amber-500 h-full transition-all duration-500" 
+                style={{ width: `${100 - dispatchedSalesRate}%` }} 
+                title={`المبالغ المتبقية بالساحة: ${100 - dispatchedSalesRate}%`}
+              />
+            </div>
+          </div>
+
+          {/* Card 3: مؤشر سلامة ومطابقة الطرود (السليمة مقابل الفروقات) */}
+          <div className="bg-white rounded-xl p-3.5 border border-slate-200 shadow-xs flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between text-slate-600 text-[11px] font-bold">
+                <span className="flex items-center gap-1">
+                  <Percent className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>مؤشر مطابقة وسلامة الطرود</span>
+                </span>
+                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold font-mono ${
+                  mismatchItemsCount > 0 ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
+                }`}>
+                  {mismatchItemsCount > 0 ? `${mismatchItemsCount} فروقات` : 'مطابقة تامة'}
+                </span>
+              </div>
+              <div className="mt-2 flex items-baseline justify-between">
+                <div>
+                  <span className="text-xl font-black font-mono text-emerald-700">{healthyPercentage}%</span>
+                  <span className="text-[10px] text-slate-500 mr-1.5">طرود سليمة ومطابقة</span>
+                </div>
+                <div className="text-left">
+                  <span className="text-sm font-bold font-mono text-rose-600">{mismatchPercentage}%</span>
+                  <span className="text-[10px] text-slate-400 mr-1">فروقات</span>
+                </div>
+              </div>
+            </div>
+            {/* Visual ratio bar */}
+            <div className="w-full bg-slate-100 rounded-full h-2 mt-2.5 overflow-hidden flex shadow-inner">
+              <div 
+                className="bg-emerald-500 h-full transition-all duration-500" 
+                style={{ width: `${healthyPercentage}%` }} 
+                title={`طرود مطابقة: ${healthyPercentage}%`}
+              />
+              <div 
+                className="bg-rose-500 h-full transition-all duration-500" 
+                style={{ width: `${mismatchPercentage}%` }} 
+                title={`طرود بها فروقات: ${mismatchPercentage}%`}
+              />
+              <div 
+                className="bg-amber-400 h-full transition-all duration-500" 
+                style={{ width: `${Math.max(0, 100 - healthyPercentage - mismatchPercentage)}%` }} 
+                title="قيد التدقيق"
+              />
+            </div>
+          </div>
+
+          {/* Card 4: ديون وبضائع معلقة (> 5 أيام) */}
+          <div className="bg-white rounded-xl p-3.5 border border-slate-200 shadow-xs flex flex-col justify-between">
+            <div className="flex items-center justify-between text-slate-600 text-[11px] font-bold">
+              <span className="flex items-center gap-1 text-amber-900">
+                <CalendarClock className="w-3.5 h-3.5 text-amber-600" />
+                <span>شحنات متأخرة بالساحة (&gt; 5 أيام)</span>
+              </span>
+              <span className="text-[10px] font-mono font-bold bg-amber-100 text-amber-900 px-2 py-0.5 rounded-full">
+                {overdueItemsCount} طرد
+              </span>
+            </div>
+            <div className="mt-2 flex items-center justify-between">
+              <div>
+                <div className="text-lg font-black text-amber-900 font-mono">
+                  {overdueItemsCount} <span className="text-xs font-sans text-slate-600">بند يحتاج إخراج</span>
+                </div>
+                <div className="text-[10px] text-slate-500">تحتاج متابعة وتواصل مع العميل لتفادي الرسوم</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setFilterStatus('overdue')}
+                className="px-2.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold text-[11px] transition-all cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap"
+              >
+                عرض المتأخرة
+              </button>
+            </div>
+            <div className="mt-2 pt-1.5 border-t border-slate-100 text-[10px] text-slate-500 flex justify-between">
+              <span>الطرود المحصورة: <b className="text-slate-800 font-mono font-bold">{totalActualPackages}</b></span>
+              <span>الطرود المقيدة: <b className="text-slate-800 font-mono font-bold">{totalExpectedPackages}</b></span>
             </div>
           </div>
         </div>
@@ -1667,6 +2525,101 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
             </div>
 
           </div>
+
+          {/* Advanced Filtering Controls (Guarantor / Auditor & Financial Status) */}
+          <div className="pt-3 mt-3 border-t border-slate-700/80 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-12 gap-3 items-center text-xs">
+            {/* Filter by Guarantor / Responsible Employee */}
+            <div className="md:col-span-4 flex items-center gap-2">
+              <label className="text-slate-300 font-bold whitespace-nowrap flex items-center gap-1">
+                <UserCheck className="w-3.5 h-3.5 text-amber-400" />
+                <span>فلترة الكفيل / المدقق:</span>
+              </label>
+              <select
+                value={selectedGuarantor}
+                onChange={(e) => setSelectedGuarantor(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-600 rounded-lg px-2.5 py-1.5 text-white font-medium focus:ring-1 focus:ring-amber-500 cursor-pointer"
+              >
+                <option value="الكل">كافة الكفلاء والمسؤولين ({availableGuarantors.length})</option>
+                {availableGuarantors.map(g => (
+                  <option key={g} value={g}>{g}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Filter by Financial Status */}
+            <div className="md:col-span-5 flex items-center gap-2">
+              <label className="text-slate-300 font-bold whitespace-nowrap flex items-center gap-1">
+                <DollarSign className="w-3.5 h-3.5 text-emerald-400" />
+                <span>الحالة المالية ($):</span>
+              </label>
+              <div className="grid grid-cols-4 gap-1 w-full bg-slate-950/70 p-1 rounded-lg border border-slate-700">
+                <button
+                  type="button"
+                  onClick={() => setFinancialFilter('all')}
+                  className={`py-1 px-1 rounded text-center font-bold text-[11px] transition-all cursor-pointer ${
+                    financialFilter === 'all'
+                      ? 'bg-amber-500 text-slate-950 shadow-xs'
+                      : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  الكل
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFinancialFilter('with_debt')}
+                  className={`py-1 px-1 rounded text-center font-bold text-[11px] transition-all cursor-pointer ${
+                    financialFilter === 'with_debt'
+                      ? 'bg-rose-600 text-white shadow-xs'
+                      : 'text-rose-300 hover:text-white'
+                  }`}
+                  title="عرض فقط البنود التي عليها مبالغ وديون مستحقة"
+                >
+                  عليها ديون
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFinancialFilter('high_debt')}
+                  className={`py-1 px-1 rounded text-center font-bold text-[11px] transition-all cursor-pointer ${
+                    financialFilter === 'high_debt'
+                      ? 'bg-amber-600 text-white shadow-xs'
+                      : 'text-amber-300 hover:text-white'
+                  }`}
+                  title="عرض البنود ذات الديون المرتفعة $500 فأكثر"
+                >
+                  &ge; $500
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFinancialFilter('zero_debt')}
+                  className={`py-1 px-1 rounded text-center font-bold text-[11px] transition-all cursor-pointer ${
+                    financialFilter === 'zero_debt'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'text-emerald-300 hover:text-white'
+                  }`}
+                  title="عرض البنود الخالصة تماماً من الديون ($0)"
+                >
+                  خالصة ($0)
+                </button>
+              </div>
+            </div>
+
+            {/* Reset Advanced Filters if active */}
+            <div className="md:col-span-3 flex justify-end">
+              {(selectedGuarantor !== 'الكل' || financialFilter !== 'all') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedGuarantor('الكل');
+                    setFinancialFilter('all');
+                  }}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 font-bold text-xs cursor-pointer transition-colors"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>إلغاء تصفية الكفيل والمالية</span>
+                </button>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* 7 Reordered Filter Buttons: EXACT SEQUENCE REQUESTED BY USER (Directive #1)
@@ -1851,25 +2804,41 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
           <table className="w-full text-right text-xs border-collapse">
             <thead className="sticky top-0 bg-slate-800 text-white font-bold z-10">
               <tr>
-                <th className="py-3 px-3 text-center w-12">#</th>
+                {/* Batch Selection Header Checkbox */}
+                <th className="py-3 px-2 text-center w-10">
+                  <input
+                    type="checkbox"
+                    checked={filteredItems.length > 0 && selectedCount === filteredItems.length}
+                    onChange={(e) => handleSelectAllVisible(e.target.checked)}
+                    className="w-4 h-4 rounded text-amber-500 focus:ring-amber-400 cursor-pointer accent-amber-500"
+                    title="تحديد أو إلغاء تحديد كافة البنود المعروضة للعمليات الجماعية"
+                  />
+                </th>
+                <th className="py-3 px-2 text-center w-10">#</th>
                 <th className="py-3 px-3 text-center w-14">تدقيق</th>
                 <th className="py-3 px-3 text-center w-40">إشارة إخراج الساحة</th>
+                <th className="py-3 px-2 text-center w-14 bg-slate-750" title="سجل تدقيق وتعديلات البند ومراسلة العميل">
+                  <span className="inline-flex items-center justify-center gap-1 text-[11px] font-bold text-amber-300">
+                    <History className="w-3 h-3 text-amber-400" />
+                    <span>سجل</span>
+                  </span>
+                </th>
                 <th className="py-3 px-3 w-24">الكود</th>
                 <th className="py-3 px-3 text-center w-28 bg-slate-700/60 text-amber-300">المبلغ / الديون ($)</th>
                 <th className="py-3 px-3 w-32 bg-slate-700/60 text-amber-300">الكفيل</th>
-                <th className="py-3 px-3 min-w-[150px]">اسم العميل</th>
+                <th className="py-3 px-3 min-w-[140px]">اسم العميل</th>
                 <th className="py-3 px-3 min-w-[170px]">العنوان والمحافظة</th>
                 <th className="py-3 px-3 text-center w-24">الطرود المقيدة</th>
                 <th className="py-3 px-3 text-center min-w-[170px]">تاريخ الدخول وعداد البقاء بالساحة</th>
                 <th className="py-3 px-3 text-center w-48">الجرد الفعلي في الساحة</th>
                 <th className="py-3 px-3 text-center w-28">حالة المطابقة</th>
-                <th className="py-3 px-3 text-center min-w-[300px]">ملاحظات الساحة</th>
+                <th className="py-3 px-3 text-center min-w-[320px]">ملاحظات الساحة والأوسمة</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
               {filteredItems.length === 0 ? (
                 <tr>
-                  <td colSpan={13} className="py-12 text-center text-slate-400">
+                  <td colSpan={15} className="py-12 text-center text-slate-400">
                     <div className="max-w-xs mx-auto text-center">
                       <p className="text-sm font-bold text-slate-600 mb-1">لا توجد بنود مطابقة للفلتر المحدد</p>
                       <p className="text-xs text-slate-400">يرجى تعديل الفلتر أو اختيار "كافة البنود" للمراجعة</p>
@@ -1891,12 +2860,16 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                   const recentMod = recentlyModifiedItems[item.id];
                   const isRecentlyModified = !!recentMod;
 
+                  const isItemSelected = !!selectedItemIds[item.id];
+
                   return (
                     <tr
                       id={`yard-row-${item.id}`}
                       key={item.id}
                       className={`transition-all duration-300 ${
-                        isRecentlyModified
+                        isItemSelected
+                          ? 'bg-amber-100/90 ring-1 ring-amber-400 font-medium'
+                          : isRecentlyModified
                           ? 'ring-2 ring-indigo-500 bg-indigo-50/80 shadow-md font-medium'
                           : isDispatched
                           ? 'bg-slate-50/80 text-slate-500 opacity-90'
@@ -1909,7 +2882,18 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                           : 'hover:bg-slate-50/80'
                       }`}
                     >
-                      <td className="py-3 px-3 text-center text-slate-400 font-bold">
+                      {/* Multi-Select Checkbox */}
+                      <td className="py-3 px-2 text-center">
+                        <input
+                          type="checkbox"
+                          checked={isItemSelected}
+                          onChange={() => handleToggleSelectOne(item.id)}
+                          className="w-4 h-4 rounded text-amber-500 focus:ring-amber-400 cursor-pointer accent-amber-500"
+                          title="تحديد هذا البند لتنفيذ عمليات جماعية"
+                        />
+                      </td>
+
+                      <td className="py-3 px-2 text-center text-slate-400 font-bold">
                         {idx + 1}
                       </td>
 
@@ -1970,6 +2954,18 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                         )}
                       </td>
 
+                      {/* Audit Trail Button */}
+                      <td className="py-3 px-2 text-center">
+                        <button
+                          type="button"
+                          onClick={() => setAuditTrailItem(item)}
+                          className="inline-flex items-center justify-center p-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 hover:border-amber-400 transition-colors cursor-pointer shadow-2xs"
+                          title="عرض سجل التدقيق والتعديلات ومراسلة العميل لهذا البند"
+                        >
+                          <History className="w-3.5 h-3.5 text-amber-700" />
+                        </button>
+                      </td>
+
                       {/* Code */}
                       <td className="py-3 px-3 font-mono font-bold text-amber-700">
                         {item.code}
@@ -1993,24 +2989,21 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                         )}
                       </td>
 
-                      {/* Customer Name */}
-                      <td className="py-3 px-3 font-bold text-slate-900">
-                        <div className="flex items-center gap-1.5 flex-wrap">
+                      {/* Customer Name with discreet communication button */}
+                      <td className="py-3 px-3 font-bold text-slate-900 whitespace-nowrap">
+                        <div className="flex items-center gap-1.5">
                           <span>{item.name}</span>
-                          {recentMod && (
-                            <span 
-                              className="inline-flex items-center gap-1 text-[10px] font-black bg-indigo-600 text-white px-2 py-0.5 rounded-full shadow-xs animate-pulse whitespace-nowrap"
-                              title={`آخر نشاط: ${recentMod.action}`}
-                            >
-                              <Sparkles className="w-3 h-3 text-amber-300" />
-                              <span>عُدّل بواسطة {recentMod.userName} ({recentMod.time})</span>
-                            </span>
-                          )}
-                          {isOverdue && !isDispatched && (
-                            <span className="text-[10px] font-black bg-amber-200 text-amber-950 px-1.5 py-0.2 rounded border border-amber-300 whitespace-nowrap">
-                              ⚠️ &gt; 5 أيام بالساحة
-                            </span>
-                          )}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveMessageClient(item);
+                            }}
+                            className="inline-flex items-center justify-center w-6 h-6 rounded-md bg-emerald-50 hover:bg-emerald-600 text-emerald-600 hover:text-white border border-emerald-200 transition-all cursor-pointer shrink-0 shadow-2xs group"
+                            title={`إرسال إشعار للعميل ${item.name} (واتساب / تيليجرام)`}
+                          >
+                            <MessageCircle className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       </td>
 
@@ -2121,9 +3114,9 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                         )}
                       </td>
 
-                      {/* Notes Column with generous space for 9+ words (Directive #9) */}
+                      {/* Notes Column with quick tags and generous space */}
                       <td className="py-3 px-3">
-                        <div className="flex items-center gap-1.5 min-w-[280px]">
+                        <div className="flex items-center gap-1.5 min-w-[320px]">
                           <input
                             type="text"
                             placeholder="ملاحظات الساحة (تتسع لجملة من 9 كلمات أو أكثر)..."
@@ -2140,6 +3133,52 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                             }}
                             className="w-full px-2.5 py-1.5 text-xs border border-slate-300 hover:border-amber-400 focus:border-amber-500 rounded-lg focus:ring-2 focus:ring-amber-500 font-medium bg-white shadow-2xs"
                           />
+
+                          {/* Quick Tag Selector Button */}
+                          <div className="relative shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => setActiveNoteTagItemId(activeNoteTagItemId === item.id ? null : item.id)}
+                              className="p-1.5 rounded-lg bg-slate-100 hover:bg-amber-100 text-slate-600 hover:text-amber-900 border border-slate-200 hover:border-amber-300 transition-colors cursor-pointer"
+                              title="إضافة وسم وملاحظة جاهزة سريعة"
+                            >
+                              <Tag className="w-3.5 h-3.5" />
+                            </button>
+
+                            {/* Dropdown with Quick Tags */}
+                            {activeNoteTagItemId === item.id && (
+                              <div className="absolute left-0 bottom-full mb-1 z-30 bg-white border border-slate-200 shadow-xl rounded-xl p-2 w-56 flex flex-col gap-1 font-['Cairo'] text-right">
+                                <div className="text-[10px] font-bold text-slate-500 pb-1 border-b border-slate-100 flex items-center justify-between">
+                                  <span>ملاحظات سريعة:</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setActiveNoteTagItemId(null)}
+                                    className="text-slate-400 hover:text-slate-600"
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                </div>
+                                <div className="flex flex-col gap-1 max-h-48 overflow-y-auto">
+                                  {QUICK_NOTE_TAGS.map(tag => (
+                                    <button
+                                      key={tag}
+                                      type="button"
+                                      onClick={() => {
+                                        const updated = note ? `${note} | ${tag}` : tag;
+                                        setItemNotes(prev => ({ ...prev, [item.id]: updated }));
+                                        syncItemUpdate(item, `إضافة وسم ملاحظة: ${tag}`, { note: updated });
+                                        setActiveNoteTagItemId(null);
+                                      }}
+                                      className="text-right text-[11px] font-semibold text-slate-700 hover:bg-amber-50 hover:text-amber-900 p-1 rounded-md transition-colors cursor-pointer"
+                                    >
+                                      {tag}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
                           {note && (
                             <button
                               type="button"
@@ -2147,7 +3186,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                                 setItemNotes(prev => ({ ...prev, [item.id]: '' }));
                                 syncItemUpdate(item, `حذف ملاحظة ساحة`, { note: '' });
                               }}
-                              className="text-slate-400 hover:text-rose-600 p-1 rounded hover:bg-rose-50 transition-colors"
+                              className="text-slate-400 hover:text-rose-600 p-1 rounded hover:bg-rose-50 transition-colors shrink-0"
                               title="مسح الملاحظة"
                             >
                               <X className="w-3.5 h-3.5" />
@@ -2162,6 +3201,66 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
             </tbody>
           </table>
         </div>
+
+        {/* 🌟 Floating Batch Actions Toolbar (تحديد جماعي للعمليات السريعة) */}
+        {selectedCount > 0 && (
+          <div className="p-3 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white border-t border-amber-500/40 flex flex-wrap items-center justify-between gap-3 animate-fade-in font-['Cairo']">
+            <div className="flex items-center gap-3">
+              <span className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-500 text-slate-950 font-black text-xs">
+                <CheckSquare className="w-4 h-4" />
+                <span>تم تحديد {selectedCount} بند</span>
+              </span>
+              <span className="text-xs text-slate-300">
+                يمكنك تطبيق العمليات التالية على كافة البنود المحددة دفعة واحدة:
+              </span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Batch Action 1: اعتماد التدقيق والمطابقة دفعة واحدة */}
+              <button
+                type="button"
+                onClick={handleBatchApproveAudit}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-xs transition-all active:scale-95 cursor-pointer"
+                title="اعتماد تدقيق ومطابقة كافة البنود المحددة دفعة واحدة"
+              >
+                <CheckCheck className="w-4 h-4" />
+                <span>اعتماد التدقيق للمحدد ({selectedCount})</span>
+              </button>
+
+              {/* Batch Action 2: تسجيل إخراج الساحة دفعة واحدة */}
+              <button
+                type="button"
+                onClick={handleBatchMarkDispatch}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs shadow-xs transition-all active:scale-95 cursor-pointer"
+                title="تسجيل إشارة إخراج الساحة لكافة البنود المحددة دفعة واحدة"
+              >
+                <Truck className="w-4 h-4" />
+                <span>تسجيل إخراج الساحة ({selectedCount})</span>
+              </button>
+
+              {/* Batch Action 3: تطبيق تاريخ الدخول المختار على المحدد فقط */}
+              <button
+                type="button"
+                onClick={() => handleBatchApplyDateToSelected(batchEntryDate)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-xs transition-all active:scale-95 cursor-pointer"
+                title={`تطبيق تاريخ ${batchEntryDate} على البنود المحددة وتحديث عداداتها`}
+              >
+                <Calendar className="w-4 h-4" />
+                <span>تثبيت التاريخ ({batchEntryDate})</span>
+              </button>
+
+              {/* Clear Selection */}
+              <button
+                type="button"
+                onClick={handleClearBatchSelection}
+                className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-xs font-semibold cursor-pointer transition-colors"
+                title="إلغاء التحديد الجماعي"
+              >
+                إلغاء التحديد
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 4. Modal: Confirm Save & Return Later Dialog */}
@@ -2367,7 +3466,388 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
         </div>
       )}
 
-      {/* 7. Modal: Set Current User Identity */}
+      {/* 8. Modal: WhatsApp & Telegram Client Communication / Alerts */}
+      {activeMessageClient && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/65 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden p-6 text-right font-['Cairo'] animate-fade-in">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+              <div className="flex items-center gap-2">
+                <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center">
+                  <MessageCircle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-900">
+                    إرسال إشعار للعميل (واتساب / تيليجرام)
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    العميل: <b className="text-slate-800">{activeMessageClient.name}</b> (كود: <b className="font-mono text-indigo-900">{activeMessageClient.code}</b>)
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveMessageClient(null)}
+                className="text-slate-400 hover:text-slate-600 p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Item Details Summary in Modal */}
+            <div className="grid grid-cols-3 gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200 text-xs mb-4">
+              <div>
+                <span className="text-slate-500 block text-[10px]">الطرود:</span>
+                <b className="text-slate-900 font-mono text-sm">📦 {activeMessageClient.packages}</b>
+              </div>
+              <div>
+                <span className="text-slate-500 block text-[10px]">أيام البقاء بالساحة:</span>
+                <b className="text-amber-800 font-mono text-sm">
+                  ⏳ {calculateDaysInYard(entryDates[activeMessageClient.id] || getDefaultEntryDate(activeMessageClient))} يوم
+                </b>
+              </div>
+              <div>
+                <span className="text-slate-500 block text-[10px]">المبلغ / الديون ($):</span>
+                <b className="text-emerald-700 font-mono text-sm">
+                  ${(activeMessageClient.totalSales || activeMessageClient.sales || 0).toLocaleString()}
+                </b>
+              </div>
+            </div>
+
+            {/* Template Selector */}
+            <div className="mb-4">
+              <label className="text-xs font-bold text-slate-700 block mb-1.5">اختر نموذج الرسالة السريعة:</label>
+              <div className="grid grid-cols-2 gap-1.5 text-xs font-semibold">
+                {[
+                  { id: 'ready', label: '✅ جاهزية الاستلام' },
+                  { id: 'overdue', label: '⚠️ تنبيه تجاوز 5 أيام' },
+                  { id: 'mismatch', label: '🔍 مراجعة فرق الطرود' },
+                  { id: 'debt', label: '💵 تسوية المستحقات' }
+                ].map(tmpl => (
+                  <button
+                    key={tmpl.id}
+                    type="button"
+                    onClick={() => {
+                      const days = calculateDaysInYard(entryDates[activeMessageClient.id] || getDefaultEntryDate(activeMessageClient));
+                      const debtVal = activeMessageClient.totalSales || activeMessageClient.sales || 0;
+                      const debtText = debtVal > 0 ? `علماً أن المبلغ المستحق هو $${debtVal}` : 'البضاعة خالصة المستحقات';
+                      
+                      let msg = '';
+                      if (tmpl.id === 'ready') {
+                        msg = `السلام عليكم أخي الكريم ${activeMessageClient.name}، نود إعلامكم بأن شحنتكم كود (${activeMessageClient.code}) بعدد (${activeMessageClient.packages}) طرود متواجدة وجاهزة للاستلام في الساحة. ${debtText}. يرجى التكرم بجدولة الاستلام. شكراً لتعاملكم معنا.`;
+                      } else if (tmpl.id === 'overdue') {
+                        msg = `عناية السيد ${activeMessageClient.name}، نود التنويه بأن بضاعتكم كود (${activeMessageClient.code}) مضى على تواجدها في الساحة أكثر من ${days} أيام. نرجو التكرم بالحضور للاستلام تفادياً لاحتساب رسوم إضافية. ${debtText}. مع التحية.`;
+                      } else if (tmpl.id === 'mismatch') {
+                        msg = `السلام عليكم ${activeMessageClient.name}، بخصوص الشحنة كود (${activeMessageClient.code})، يرجى التنسيق مع مشرف الساحة لتأكيد جرد ومطابقة الطرود قبل الاستلام.`;
+                      } else {
+                        msg = `السلام عليكم أخي ${activeMessageClient.name}، نرجو التكرم بتسوية المبلغ المستحق (${debtText}) على كود (${activeMessageClient.code}) تمهيداً لإنهاء إجراءات الإخراج والتسليم.`;
+                      }
+                      setCustomMessageText(msg);
+                    }}
+                    className="p-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-emerald-50 hover:border-emerald-300 text-slate-700 text-right cursor-pointer transition-colors"
+                  >
+                    {tmpl.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Editable Notification Text */}
+            <div className="mb-4">
+              <label className="text-xs font-bold text-slate-700 block mb-1.5">نص الرسالة المرسلة:</label>
+              <textarea
+                rows={4}
+                value={customMessageText || `السلام عليكم أخي الكريم ${activeMessageClient.name}، نود إعلامكم بأن شحنتكم كود (${activeMessageClient.code}) بعدد (${activeMessageClient.packages}) طرود جاهزة للاستلام في الساحة. يرجى التكرم بالاستلام. شكراً لتعاملكم معنا.`}
+                onChange={(e) => setCustomMessageText(e.target.value)}
+                className="w-full p-2.5 rounded-xl border border-slate-300 text-xs font-medium text-slate-900 focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const phone = getCleanWhatsAppPhone(activeMessageClient.phone || activeMessageClient.phone2);
+                  const msg = encodeURIComponent(customMessageText || `السلام عليكم ${activeMessageClient.name}، شحنتكم كود (${activeMessageClient.code}) جاهزة للاستلام بالساحة.`);
+                  const url = phone ? `https://wa.me/${phone}?text=${msg}` : `https://wa.me/?text=${msg}`;
+                  window.open(url, '_blank');
+                  syncItemUpdate(activeMessageClient, 'إرسال إشعار عبر واتساب للعميل', {});
+                }}
+                className="flex-1 min-w-[130px] flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md transition-all cursor-pointer"
+              >
+                <MessageCircle className="w-4 h-4" />
+                <span>إرسال واتساب</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const msg = encodeURIComponent(customMessageText || `السلام عليكم ${activeMessageClient.name}، شحنتكم كود (${activeMessageClient.code}) جاهزة للاستلام بالساحة.`);
+                  window.open(`https://t.me/share/url?url=&text=${msg}`, '_blank');
+                  syncItemUpdate(activeMessageClient, 'إرسال إشعار عبر تيليجرام للعميل', {});
+                }}
+                className="flex-1 min-w-[130px] flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-blue-500 hover:bg-blue-600 text-white font-bold text-xs shadow-md transition-all cursor-pointer"
+              >
+                <Send className="w-4 h-4" />
+                <span>إرسال تيليجرام</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const textToCopy = customMessageText || `السلام عليكم ${activeMessageClient.name}، شحنتكم كود (${activeMessageClient.code}) جاهزة للاستلام بالساحة.`;
+                  navigator.clipboard.writeText(textToCopy);
+                  setToastMessage('تم نسخ نص الإشعار بنجاح إلى الحافظة');
+                }}
+                className="px-3.5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs border border-slate-300 transition-all cursor-pointer"
+                title="نسخ نص الرسالة"
+              >
+                <Copy className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 9. Modal: Individual Item Audit Trail (سجل تدقيق البند) */}
+      {auditTrailItem && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/65 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden p-6 text-right font-['Cairo'] animate-fade-in">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+              <div className="flex items-center gap-2">
+                <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-900 flex items-center justify-center">
+                  <History className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-900">
+                    سجل تدقيق وتعديلات البند
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    كود: <b className="font-mono text-indigo-900">{auditTrailItem.code}</b> | العميل: <b className="text-slate-800">{auditTrailItem.name}</b>
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAuditTrailItem(null)}
+                className="text-slate-400 hover:text-slate-600 p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-2.5 max-h-[350px] overflow-y-auto pr-1">
+              {auditLogs.filter(log => log.itemId === auditTrailItem.id || log.code === auditTrailItem.code).length === 0 ? (
+                <div className="text-center py-8 text-slate-400 text-xs">
+                  لم يتم تسجيل أي تعديلات يدوية على هذا البند بعد. البند يحتفظ ببياناته الأصلية.
+                </div>
+              ) : (
+                auditLogs
+                  .filter(log => log.itemId === auditTrailItem.id || log.code === auditTrailItem.code)
+                  .map(log => (
+                    <div key={log.id} className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs flex items-start justify-between gap-2">
+                      <div>
+                        <div className="font-bold text-slate-800">{log.action}</div>
+                        <div className="text-[11px] text-slate-500 mt-0.5">
+                          بواسطة: <b className="text-indigo-900">{log.userName}</b>
+                        </div>
+                      </div>
+                      <span className="text-[10px] font-mono text-slate-500 bg-white px-2 py-0.5 rounded border border-slate-200 whitespace-nowrap">
+                        {log.timestamp}
+                      </span>
+                    </div>
+                  ))
+              )}
+            </div>
+
+            <div className="mt-5 pt-3 border-t border-slate-100 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => {
+                  const target = auditTrailItem;
+                  setAuditTrailItem(null);
+                  setActiveMessageClient(target);
+                }}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs cursor-pointer shadow-xs transition-colors"
+                title="إرسال إشعار للعميل عبر واتساب أو تيليجرام"
+              >
+                <MessageCircle className="w-4 h-4" />
+                <span>إشعار العميل (واتساب / تيليجرام)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setAuditTrailItem(null)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs cursor-pointer transition-colors"
+              >
+                إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 10. Modal: Full General Audit Trail (سجل حركات وتدقيق الساحة العام) */}
+      {showFullAuditModal && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/65 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-2xl overflow-hidden p-6 text-right font-['Cairo'] animate-fade-in">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+              <div className="flex items-center gap-2">
+                <div className="w-10 h-10 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center">
+                  <History className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-900">
+                    سجل التدقيق والتتبع العام لعمليات الساحة
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    توثيق كامل لكافة عمليات مطابقة الأعداد، تسجيل الإخراج، وتعديل الملاحظات بالوقت واسم المستخدم
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowFullAuditModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
+              {auditLogs.length === 0 ? (
+                <div className="text-center py-10 text-slate-400 text-xs">
+                  لا توجد حركات تدقيق مسجلة حتى الآن.
+                </div>
+              ) : (
+                auditLogs.map(log => (
+                  <div key={log.id} className="p-3 rounded-xl bg-slate-50 hover:bg-slate-100/80 border border-slate-200 text-xs flex items-center justify-between gap-3 transition-colors">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-7 h-7 rounded-lg bg-amber-100 text-amber-900 flex items-center justify-center text-[10px] font-bold">
+                        {log.code ? log.code.slice(0, 3) : 'ساحة'}
+                      </div>
+                      <div>
+                        <div className="font-bold text-slate-800">
+                          {log.action}
+                          {log.clientName && <span className="text-slate-500 font-normal mr-1.5">({log.clientName})</span>}
+                        </div>
+                        <div className="text-[11px] text-slate-500 mt-0.5">
+                          المسؤول: <b className="text-indigo-900">{log.userName}</b>
+                          {log.shipment && <span className="mr-2 text-slate-400">الشحنة: {log.shipment}</span>}
+                        </div>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-mono text-slate-500 bg-white px-2 py-1 rounded border border-slate-200 whitespace-nowrap">
+                      {log.timestamp}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="mt-5 pt-3 border-t border-slate-100 flex items-center justify-between">
+              <span className="text-xs text-slate-500">
+                إجمالي السجلات: <b className="font-mono text-slate-900">{auditLogs.length}</b> حركة
+              </span>
+              <div className="flex items-center gap-2">
+                {auditLogs.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuditLogs([]);
+                      localStorage.removeItem('atlas_yard_audit_logs');
+                      setToastMessage('تم تفريغ سجل التدقيق بنجاح');
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-rose-100 text-slate-600 hover:text-rose-700 text-xs font-semibold cursor-pointer"
+                  >
+                    مسح السجل
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowFullAuditModal(false)}
+                  className="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold cursor-pointer"
+                >
+                  إغلاق
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 11. Modal: Inventory & Accounting Report Options (تصدير تقرير الجرد والتدقيق المحاسبي) */}
+      {showExportModal && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/65 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden p-6 text-right font-['Cairo'] animate-fade-in">
+            <div className="w-12 h-12 rounded-2xl bg-indigo-100 text-indigo-700 flex items-center justify-center mx-auto mb-3 border border-indigo-200">
+              <FileText className="w-6 h-6" />
+            </div>
+
+            <h3 className="text-base font-extrabold text-slate-900 text-center mb-1">
+              تقرير الجرد والتدقيق المحاسبي
+            </h3>
+            
+            <p className="text-xs text-slate-500 text-center leading-relaxed mb-4">
+              تقرير رسمي للشحنة الحالية <b className="text-slate-800">({selectedShipment})</b> يتضمن كافة مؤشرات الأداء المالي، الطرود المحصلة، الفروقات، والديون
+            </p>
+
+            {/* Quick Metrics in Export Modal */}
+            <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-2 text-xs mb-5">
+              <div className="flex justify-between items-center text-slate-600">
+                <span>عدد البنود في التقرير:</span>
+                <b className="font-mono text-slate-900">{filteredItems.length} بند</b>
+              </div>
+              <div className="flex justify-between items-center text-slate-600">
+                <span>إجمالي المبالغ المستحقة ($):</span>
+                <b className="font-mono text-emerald-700">${totalFilteredSales.toLocaleString()}</b>
+              </div>
+              <div className="flex justify-between items-center text-slate-600">
+                <span>المحصل (المُخرج) مقابل المتبقي:</span>
+                <b className="font-mono text-cyan-800">${dispatchedSales.toLocaleString()} / ${remainingInYardSales.toLocaleString()}</b>
+              </div>
+              <div className="flex justify-between items-center text-slate-600">
+                <span>البنود التي بها فروقات:</span>
+                <b className="font-mono text-rose-700">{mismatchItemsCount} بند</b>
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="space-y-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowExportModal(false);
+                  handlePrintAccountingReport();
+                }}
+                className="w-full py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-500 hover:to-indigo-600 text-white font-extrabold text-xs shadow-md flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-95"
+              >
+                <Printer className="w-4 h-4" />
+                <span>طباعة تقرير التدقيق المحاسبي المعتمد (A4 / PDF)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowExportModal(false);
+                  exportYardInventoryToExcel(filteredItems, selectedShipment, actualCounts, checkedItems, itemNotes);
+                }}
+                className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-400 font-bold text-xs border border-slate-700 flex items-center justify-center gap-2 cursor-pointer transition-colors"
+              >
+                <FileSpreadsheet className="w-4 h-4" />
+                <span>تصدير إلى ملف إكسل متكامل (Excel)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowExportModal(false)}
+                className="w-full py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition-colors cursor-pointer"
+              >
+                إلغاء
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {showUserModal && (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/65 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden p-6 text-right font-['Cairo'] animate-fade-in">

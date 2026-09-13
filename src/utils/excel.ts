@@ -96,7 +96,9 @@ export function exportYardInventoryToExcel(
   actualCounts?: Record<string, number | ''>,
   checkedItems?: Record<string, boolean>,
   itemNotes?: Record<string, string>,
-  itemPhotos?: Record<string, AttachedPhoto[]>
+  itemPhotos?: Record<string, AttachedPhoto[]>,
+  entryDates?: Record<string, string>,
+  dispatchedItems?: Record<string, any>
 ) {
   const wb = XLSX.utils.book_new();
 
@@ -111,21 +113,33 @@ export function exportYardInventoryToExcel(
     }
 
     const actualVal = act !== undefined && act !== '' ? Number(act) : '';
+    const diff = actualVal !== '' ? Number(actualVal) - item.packages : 0;
     const statusVal = isChecked 
-      ? (actualVal !== '' && actualVal !== item.packages ? `يوجد فرق (${Number(actualVal) - item.packages})` : 'مطابق ومفحوص')
+      ? (actualVal !== '' && actualVal !== item.packages ? `يوجد فرق (${diff > 0 ? `+${diff}` : diff})` : 'مطابق ومفحوص')
       : (actualVal !== '' ? 'تم الرصد' : 'قيد الانتظار');
+
+    const entryDate = entryDates ? (entryDates[item.id] || '') : '';
+    const isDispatched = dispatchedItems && dispatchedItems[item.id]?.dispatched;
+    const dispatchStatus = isDispatched 
+      ? `تم الإخراج (${dispatchedItems[item.id]?.date || ''} ${dispatchedItems[item.id]?.time || ''})` 
+      : 'متواجدة بالساحة';
 
     return {
       'التسلسل': idx + 1,
+      'رقم الشحنة': item.shipment || '',
       'كود العميل': item.code,
       'المبلغ / الديون ($)': item.sales || 0,
       'الكفيل': item.guarantor || '',
       'اسم العميل': item.name,
+      'رقم الهاتف': item.phone || item.phone2 || '',
       'العنوان': item.address,
       'المحافظة': item.city,
       'عدد الطرود المقيد': item.packages,
       'الجرد الفعلي (الساحة)': actualVal !== '' ? actualVal : item.packages,
+      'الفارق': diff,
       'حالة التدقيق': statusVal,
+      'تاريخ الدخول': entryDate,
+      'حالة الإخراج': dispatchStatus,
       'ملاحظات ومرفقات الساحة': note,
       'توقيع مسؤول الجرد': ''
     };
@@ -135,21 +149,26 @@ export function exportYardInventoryToExcel(
   ws['!cols'] = [
     { wch: 8 },
     { wch: 14 },
+    { wch: 14 },
     { wch: 18 },
     { wch: 18 },
     { wch: 24 },
+    { wch: 18 },
     { wch: 30 },
     { wch: 16 },
     { wch: 18 },
     { wch: 20 },
-    { wch: 18 },
+    { wch: 12 },
+    { wch: 20 },
+    { wch: 16 },
+    { wch: 24 },
     { wch: 45 },
     { wch: 20 }
   ];
 
   XLSX.utils.book_append_sheet(wb, ws, 'جرد الساحة');
   const dateStr = new Date().toISOString().split('T')[0];
-  XLSX.writeFile(wb, `جرد_الساحة_${shipmentNumber}_${dateStr}.xlsx`);
+  XLSX.writeFile(wb, `تقرير_جرد_الساحة_${shipmentNumber}_${dateStr}.xlsx`);
 }
 
 /**
