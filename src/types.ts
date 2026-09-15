@@ -37,4 +37,32 @@ export interface FilterState {
   searchQuery: string;
 }
 
-export type ActivePage = 'dashboard' | 'yard_inventory' | 'reports';
+export type ActivePage = 'dashboard' | 'yard_inventory' | 'reports' | 'debt_collection';
+
+export interface PaymentEntry {
+  id: string;
+  amount: number;
+  date: string;
+  driverName: string;
+  paymentMethod: 'نقد' | 'حوالة' | 'زين كاش' | 'شيك' | 'أخرى';
+  notes?: string;
+  receiptNumber?: string;
+}
+
+export type CollectionStatus = 'مكتمل' | 'جزئي' | 'لم يبدأ';
+
+export interface CollectionRecord {
+  id: string;             // Unique identifier (typically shipment.id or `${shipment.shipment}_${shipment.code}`)
+  shipmentCode: string;   // كود الشحنة (e.g. RQ6042)
+  clientCode: string;     // كود العميل (e.g. B201)
+  clientName: string;     // اسم الزبون
+  guarantor: string;      // الكفيل
+  totalAmount: number;    // المبلغ الكلي ($)
+  collectedAmount: number;// المبلغ المستحصل ($)
+  remainingAmount: number;// المبلغ المتبقي ($)
+  status: CollectionStatus;// حالة الاستحصال (مكتمل / جزئي / لم يبدأ)
+  driverName?: string;    // اسم السائق المسؤول عن آخر تحصيل
+  notes?: string;         // ملاحظات
+  lastUpdated?: string;   // تاريخ ووقت آخر حركة
+  payments: PaymentEntry[];
+}

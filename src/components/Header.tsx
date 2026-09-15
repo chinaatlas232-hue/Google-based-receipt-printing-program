@@ -9,7 +9,8 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   RefreshCw,
-  CheckCircle2
+  CheckCircle2,
+  Wallet
 } from 'lucide-react';
 import { ActivePage } from '../types';
 import { COMPANY_INFO } from '../data/initialData';
@@ -168,6 +169,18 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <BarChart3 className="w-4 h-4" />
               <span>تقارير</span>
+            </button>
+
+            <button
+              onClick={() => setActivePage('debt_collection')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${
+                activePage === 'debt_collection'
+                  ? 'bg-amber-500 text-slate-950 shadow-md font-extrabold'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
+              }`}
+            >
+              <Wallet className="w-4 h-4" />
+              <span>واجهة الاستحصالات</span>
             </button>
           </nav>
 

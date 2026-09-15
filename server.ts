@@ -274,6 +274,43 @@ app.get('/api/health', (req, res) => {
 });
 
 // ============================================================================
+// Debt Collections & Payments Persistence Engine
+// ============================================================================
+const collectionsPath = path.join(UPLOAD_DIR, 'collections_data.json');
+let cachedCollections: Record<string, any> = {};
+
+if (fs.existsSync(collectionsPath)) {
+  try {
+    const raw = fs.readFileSync(collectionsPath, 'utf8');
+    cachedCollections = JSON.parse(raw);
+    console.log('[Debt Collection] Loaded cached collections from disk.');
+  } catch (err) {
+    console.error('Failed to parse collections_data.json:', err);
+  }
+}
+
+app.get('/api/collections', (req, res) => {
+  res.json({
+    success: true,
+    collections: cachedCollections,
+  });
+});
+
+app.post('/api/collections', (req, res) => {
+  try {
+    const { collections } = req.body;
+    if (collections && typeof collections === 'object') {
+      cachedCollections = { ...cachedCollections, ...collections };
+      fs.writeFileSync(collectionsPath, JSON.stringify(cachedCollections, null, 2), 'utf8');
+      return res.json({ success: true, count: Object.keys(cachedCollections).length });
+    }
+    res.status(400).json({ success: false, error: 'Invalid collections payload' });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ============================================================================
 // Real-time Yard Inventory Multi-User & Multi-Device Collaboration Engine
 // ============================================================================
 const yardStatePath = path.join(UPLOAD_DIR, 'yard_inventory_state.json');

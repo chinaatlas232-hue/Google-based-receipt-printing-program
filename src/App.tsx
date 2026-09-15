@@ -16,6 +16,7 @@ import { AddShipmentModal } from './components/AddShipmentModal';
 import { DriveSyncModal } from './components/DriveSyncModal';
 import { YardInventoryView } from './components/YardInventoryView';
 import { ShipmentReportsView } from './components/ShipmentReportsView';
+import { DebtCollectionView } from './components/DebtCollectionView';
 import { exportShipmentsToExcel, exportYardInventoryToExcel } from './utils/excel';
 import { auth } from './services/firebaseAuth';
 
@@ -505,6 +506,14 @@ export default function App() {
             shipments={shipments} 
             onSyncDrive={handleDirectDriveSync} 
             isSyncing={isDriveSyncing} 
+          />
+        )}
+
+        {activePage === 'debt_collection' && (
+          <DebtCollectionView
+            shipments={shipments}
+            onSyncDrive={handleDirectDriveSync}
+            isSyncing={isDriveSyncing}
           />
         )}
       </main>
