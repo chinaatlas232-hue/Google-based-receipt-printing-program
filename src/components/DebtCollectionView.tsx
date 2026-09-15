@@ -129,6 +129,10 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
   const [inputNotes, setInputNotes] = useState('');
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
 
+  // Delete Action State
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deleteTargetRecord, setDeleteTargetRecord] = useState<CollectionRecord | null>(null);
+
   // Extract unique filter lists from shipments
   const shipmentCodes = useMemo(() => {
     const set = new Set(shipments.map(s => s.shipment).filter(Boolean));
@@ -397,38 +401,68 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
     }, 1200);
   };
 
-  // Delete a payment entry from history
-  const handleDeletePayment = (paymentId: string) => {
-    if (!historyRecord) return;
-    if (!confirm('هل أنت متأكد من حذف هذه الدفعة من سجل الاستحصالات؟')) return;
+  // Delete a specific payment entry by ID safely with dynamic recalculation
+  const handleDeleteSpecificPayment = (targetRecordId: string, paymentId: string) => {
+    const record = collectionMap[targetRecordId] || allRecords.find(r => r.id === targetRecordId);
+    if (!record) return;
 
-    const updatedPayments = historyRecord.payments.filter(p => p.id !== paymentId);
+    const updatedPayments = (record.payments || []).filter(p => p.id !== paymentId);
     const newCollected = updatedPayments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
-    const newRemaining = Math.max(0, historyRecord.totalAmount - newCollected);
+    const newRemaining = Math.max(0, record.totalAmount - newCollected);
 
     let newStatus: CollectionStatus = 'لم يبدأ';
-    if (historyRecord.totalAmount <= 0 || newCollected >= historyRecord.totalAmount) {
+    if (record.totalAmount <= 0 || newCollected >= record.totalAmount) {
       newStatus = 'مكتمل';
     } else if (newCollected > 0) {
       newStatus = 'جزئي';
     }
 
+    const latestPayment = updatedPayments[0];
+
     const updated: CollectionRecord = {
-      ...historyRecord,
+      ...record,
       collectedAmount: newCollected,
       remainingAmount: newRemaining,
       status: newStatus,
       payments: updatedPayments,
+      driverName: latestPayment ? latestPayment.driverName : (newCollected > 0 ? record.driverName : ''),
       lastUpdated: new Date().toLocaleString('ar-IQ')
     };
 
     const newMap = {
       ...collectionMap,
-      [historyRecord.id]: updated
+      [record.id]: updated
     };
 
     saveCollections(newMap);
-    setHistoryRecord(updated);
+
+    // Sync with modal records if active
+    if (historyRecord && historyRecord.id === targetRecordId) {
+      setHistoryRecord(updated);
+    }
+    if (deleteTargetRecord && deleteTargetRecord.id === targetRecordId) {
+      setDeleteTargetRecord(updated);
+    }
+  };
+
+  // Delete last payment (التراجع عن آخر حركة استحصال)
+  const handleDeleteLastPayment = (record: CollectionRecord) => {
+    if (!record.payments || record.payments.length === 0) return;
+    const lastPayment = record.payments[0]; // first item is newest
+    handleDeleteSpecificPayment(record.id, lastPayment.id);
+  };
+
+  // Delete a payment entry from history modal
+  const handleDeletePayment = (paymentId: string) => {
+    if (!historyRecord) return;
+    if (!confirm('هل أنت متأكد من حذف هذه الدفعة المحددة؟ سيتم إعادة احتساب المبلغ المستحصل والمتبقي تلقائياً.')) return;
+    handleDeleteSpecificPayment(historyRecord.id, paymentId);
+  };
+
+  // Open Delete Management Dialog from table row
+  const handleOpenDeleteDialog = (record: CollectionRecord) => {
+    setDeleteTargetRecord(record);
+    setDeleteModalOpen(true);
   };
 
   // Export to Excel
@@ -1294,6 +1328,24 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
                           >
                             <Printer className="w-3.5 h-3.5" />
                           </button>
+
+                          {/* Delete / Revert Transaction Button */}
+                          <button
+                            onClick={() => handleOpenDeleteDialog(item)}
+                            disabled={!item.payments || item.payments.length === 0}
+                            className={`p-1.5 rounded-lg transition-colors border ${
+                              item.payments && item.payments.length > 0
+                                ? 'bg-slate-100 hover:bg-rose-50 text-slate-500 hover:text-rose-600 border-slate-200 cursor-pointer'
+                                : 'bg-slate-50 text-slate-300 border-slate-100 cursor-not-allowed opacity-50'
+                            }`}
+                            title={
+                              item.payments && item.payments.length > 0
+                                ? `إلغاء أو حذف حركة دفع (دفعات مسجلة: ${item.payments.length})`
+                                : 'لا توجد دفعات قابلة للحذف'
+                            }
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -1728,6 +1780,148 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
                   </button>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 5. Delete & Movement Revert Management Modal */}
+      {deleteModalOpen && deleteTargetRecord && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
+            {/* Modal Header */}
+            <div className="bg-rose-600 text-white p-4 sm:p-5 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-rose-700 rounded-xl">
+                  <Trash2 className="w-5 h-5 text-rose-100" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-base sm:text-lg">
+                    إدارة حذف وتعديل الحركات المالية
+                  </h3>
+                  <p className="text-xs text-rose-100">
+                    الشحنة: <strong className="text-white">{deleteTargetRecord.shipmentCode}</strong> — الزبون: <strong className="text-white">{deleteTargetRecord.clientName}</strong>
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setDeleteModalOpen(false)}
+                className="p-1.5 text-rose-200 hover:text-white rounded-lg hover:bg-rose-700 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 space-y-4 overflow-y-auto">
+              {/* Financial Status Summary */}
+              <div className="grid grid-cols-3 gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200 text-center">
+                <div>
+                  <span className="text-[10px] text-slate-500 block">المطلوب</span>
+                  <span className="font-black text-sm text-slate-800" dir="ltr">${deleteTargetRecord.totalAmount.toFixed(2)}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-emerald-600 block">المستحصل حالياً</span>
+                  <span className="font-black text-sm text-emerald-700" dir="ltr">${deleteTargetRecord.collectedAmount.toFixed(2)}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-rose-600 block">المتبقي (الدين)</span>
+                  <span className="font-black text-sm text-rose-700" dir="ltr">${deleteTargetRecord.remainingAmount.toFixed(2)}</span>
+                </div>
+              </div>
+
+              {/* Safety notice banner */}
+              <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 flex items-start gap-2.5 text-xs text-amber-900 leading-relaxed">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <strong>تنبيه الأمان المالي:</strong> لن يتم مسح بيانات الشحنة أو جميع الاستحصالات، بل سيتم حذف الحركة المحددة فقط وإعادة احتساب المتبقي والمستحصل فورياً.
+                </div>
+              </div>
+
+              {/* Quick Undo Action for Latest Payment */}
+              {deleteTargetRecord.payments && deleteTargetRecord.payments.length > 0 && (
+                <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-rose-900">
+                      التراجع عن آخر حركة استحصال (سريعة):
+                    </span>
+                    <span className="text-xs font-black text-rose-700" dir="ltr">
+                      ${deleteTargetRecord.payments[0].amount.toFixed(2)}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-rose-800">
+                    التاريخ: {deleteTargetRecord.payments[0].date} — السائق: {deleteTargetRecord.payments[0].driverName || '—'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (confirm(`هل أنت متأكد من التراجع عن آخر دفعة بقيمة $${deleteTargetRecord.payments[0].amount.toFixed(2)}؟`)) {
+                        handleDeleteLastPayment(deleteTargetRecord);
+                      }
+                    }}
+                    className="w-full py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-extrabold shadow-sm transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>إلغاء آخر دفعة فقط وإعادة احتساب الدين</span>
+                  </button>
+                </div>
+              )}
+
+              {/* All Individual Payments List */}
+              <div className="space-y-2">
+                <h4 className="text-xs font-bold text-slate-700 flex items-center justify-between">
+                  <span>قائمة الحركات والدفعات المسجلة ({deleteTargetRecord.payments?.length || 0}):</span>
+                </h4>
+                <div className="max-h-56 overflow-y-auto space-y-2 divide-y divide-slate-100">
+                  {(!deleteTargetRecord.payments || deleteTargetRecord.payments.length === 0) ? (
+                    <p className="text-xs text-slate-400 text-center py-6 bg-slate-50 rounded-xl">
+                      لا توجد أي حركات دفع مسجلة حالياً لهذه الشحنة.
+                    </p>
+                  ) : (
+                    deleteTargetRecord.payments.map((p, idx) => (
+                      <div
+                        key={p.id}
+                        className="pt-2 flex items-center justify-between gap-3 text-xs"
+                      >
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-slate-800">دفعة #{idx + 1}</span>
+                            <span className="font-black text-emerald-700" dir="ltr">${p.amount.toFixed(2)}</span>
+                            <span className="bg-slate-100 px-1.5 py-0.5 rounded text-[10px] text-slate-600 font-semibold">{p.paymentMethod}</span>
+                          </div>
+                          <div className="text-[11px] text-slate-500 truncate mt-0.5">
+                            {p.date} • السائق: {p.driverName || '—'} {p.notes ? `• ${p.notes}` : ''}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (confirm(`هل أنت متأكد من حذف هذه الدفعة المحددة بقيمة $${p.amount.toFixed(2)}؟`)) {
+                              handleDeleteSpecificPayment(deleteTargetRecord.id, p.id);
+                            }
+                          }}
+                          className="px-2.5 py-1.5 bg-rose-100 hover:bg-rose-200 text-rose-700 rounded-lg font-bold text-[11px] flex items-center gap-1 transition-colors cursor-pointer shrink-0"
+                          title="حذف هذه الدفعة وإعادة احتساب الرصيد"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>حذف</span>
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setDeleteModalOpen(false)}
+                className="px-5 py-2 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-white transition-colors cursor-pointer"
+              >
+                إغلاق
+              </button>
             </div>
           </div>
         </div>
