@@ -30,6 +30,7 @@ import {
 import { ShipmentRecord, CollectionRecord, PaymentEntry, CollectionStatus } from '../types';
 import { COMPANY_INFO } from '../data/initialData';
 import { ATLAS_LOGO_BASE64 } from '../data/logoBase64';
+import { YARD_INVENTORY_STORAGE_KEY } from './YardInventoryView';
 import * as XLSX from 'xlsx';
 
 interface DebtCollectionViewProps {
@@ -84,6 +85,70 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
     loadServerCollections();
   }, []);
 
+  // Physical yard tally state (الجرد الفعلي). This view is fully unlinked from the
+  // default/initial dataset: a shipment (and all of its clients) only appears here
+  // once EVERY one of its items has been physically tallied in واجهة جرد المستودعات.
+  const [tallyActualCounts, setTallyActualCounts] = useState<Record<string, number | ''>>(() => {
+    try {
+      const raw = localStorage.getItem(YARD_INVENTORY_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        return parsed.actualCounts || {};
+      }
+    } catch (e) {
+      console.warn('Failed to read yard tally state from localStorage', e);
+    }
+    return {};
+  });
+
+  useEffect(() => {
+    const loadTallyState = async () => {
+      let serverCounts: Record<string, number | ''> = {};
+      try {
+        const res = await fetch('/api/yard-inventory');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.state) {
+            serverCounts = data.state.actualCounts || {};
+          }
+        }
+      } catch {
+        // fall back to localStorage only
+      }
+
+      let localCounts: Record<string, number | ''> = {};
+      try {
+        const raw = localStorage.getItem(YARD_INVENTORY_STORAGE_KEY);
+        if (raw) localCounts = JSON.parse(raw).actualCounts || {};
+      } catch {
+        // ignore malformed local draft
+      }
+
+      setTallyActualCounts({ ...serverCounts, ...localCounts });
+    };
+
+    loadTallyState();
+    window.addEventListener('focus', loadTallyState);
+    window.addEventListener('storage', loadTallyState);
+    return () => {
+      window.removeEventListener('focus', loadTallyState);
+      window.removeEventListener('storage', loadTallyState);
+    };
+  }, []);
+
+  // Availability is decided per ITEM: any client whose physical tally is entered
+  // appears immediately, while items still awaiting their tally stay hidden.
+  const isItemTallied = (item: ShipmentRecord): boolean => {
+    const value = tallyActualCounts[item.id];
+    return value !== undefined && value !== '';
+  };
+
+  // Only physically tallied items are eligible to be shown in this view
+  const visibleShipments = useMemo(
+    () => shipments.filter(isItemTallied),
+    [shipments, tallyActualCounts]
+  );
+
   // Save collections helper
   const saveCollections = (updatedMap: Record<string, CollectionRecord>) => {
     setCollectionMap(updatedMap);
@@ -133,20 +198,20 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleteTargetRecord, setDeleteTargetRecord] = useState<CollectionRecord | null>(null);
 
-  // Extract unique filter lists from shipments
+  // Extract unique filter lists from tallied shipments only
   const shipmentCodes = useMemo(() => {
-    const set = new Set(shipments.map(s => s.shipment).filter(Boolean));
+    const set = new Set(visibleShipments.map(s => s.shipment).filter(Boolean));
     return Array.from(set).sort();
-  }, [shipments]);
+  }, [visibleShipments]);
 
   const guarantorList = useMemo(() => {
-    const set = new Set(shipments.map(s => s.guarantor).filter(Boolean));
+    const set = new Set(visibleShipments.map(s => s.guarantor).filter(Boolean));
     return Array.from(set).sort();
-  }, [shipments]);
+  }, [visibleShipments]);
 
-  // Generate complete collection records list merging shipments with saved collections
+  // Generate complete collection records list merging tallied shipments with saved collections
   const allRecords = useMemo<CollectionRecord[]>(() => {
-    return shipments.map(s => {
+    return visibleShipments.map(s => {
       const recId = s.id || `${s.shipment}_${s.code}`;
       const saved = collectionMap[recId];
 
@@ -197,7 +262,7 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
         payments
       };
     });
-  }, [shipments, collectionMap]);
+  }, [visibleShipments, collectionMap]);
 
   // Filtered Records
   const filteredRecords = useMemo(() => {
@@ -344,7 +409,7 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
     }
 
     const now = new Date();
-    const formattedDate = now.toLocaleString('ar-IQ', {
+    const formattedDate = now.toLocaleString('ar-IQ-u-nu-latn', {
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
@@ -426,7 +491,7 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
       status: newStatus,
       payments: updatedPayments,
       driverName: latestPayment ? latestPayment.driverName : (newCollected > 0 ? record.driverName : ''),
-      lastUpdated: new Date().toLocaleString('ar-IQ')
+      lastUpdated: new Date().toLocaleString('en-US')
     };
 
     const newMap = {
@@ -497,11 +562,11 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
   // Print Shipment Payment Statement (طباعة كشف حساب واستحصالات الشحنة)
   const handlePrintPaymentStatement = (record: CollectionRecord) => {
     // Find related shipment record from Google Sheets dataset for additional metadata
-    const shipInfo = shipments.find(
+    const shipInfo = visibleShipments.find(
       s => s.id === record.id || (s.shipment === record.shipmentCode && s.code === record.clientCode)
     );
 
-    const todayStr = new Date().toLocaleDateString('ar-IQ', {
+    const todayStr = new Date().toLocaleDateString('ar-IQ-u-nu-latn', {
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
@@ -1138,9 +1203,9 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
           <div className="flex items-center gap-2">
             <span>عدد النتائج المطابقة:</span>
             <span className="font-extrabold text-slate-900 bg-amber-100 text-amber-900 px-2 py-0.5 rounded-md">
-              {filteredRecords.length.toLocaleString('ar-IQ')} سجل
+              {filteredRecords.length.toLocaleString('en-US')} سجل
             </span>
-            <span>من إجمالي {allRecords.length.toLocaleString('ar-IQ')} شحنة</span>
+            <span>من إجمالي {allRecords.length.toLocaleString('en-US')} شحنة</span>
           </div>
 
           <div className="flex items-center gap-3">
@@ -1198,11 +1263,18 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
               {displayedRecords.length === 0 ? (
                 <tr>
                   <td colSpan={11} className="py-12 text-center text-slate-400">
-                    <div className="flex flex-col items-center justify-center gap-2">
-                      <Wallet className="w-8 h-8 text-slate-300" />
-                      <p className="font-bold text-slate-500">لا توجد سجلات مطابقة لمعايير البحث الحالية</p>
-                      <p className="text-xs text-slate-400">جرب تغيير كلمات البحث أو إعادة ضبط الفلاتر</p>
-                    </div>
+                    {visibleShipments.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center gap-2">
+                        <Wallet className="w-8 h-8 text-slate-300" />
+                        <p className="font-bold text-slate-500">الجدول فارغ، بانتظار إتمام جرد الشحنات لعرض المبالغ والديون</p>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center gap-2">
+                        <Wallet className="w-8 h-8 text-slate-300" />
+                        <p className="font-bold text-slate-500">لا توجد سجلات مطابقة لمعايير البحث الحالية</p>
+                        <p className="text-xs text-slate-400">جرب تغيير كلمات البحث أو إعادة ضبط الفلاتر</p>
+                      </div>
+                    )}
                   </td>
                 </tr>
               ) : (

@@ -12,7 +12,9 @@ import {
   ChevronsRight,
   ChevronsLeft,
   FileSpreadsheet,
-  RefreshCw
+  RefreshCw,
+  Plane,
+  Ship
 } from 'lucide-react';
 import { ShipmentRecord } from '../types';
 
@@ -28,6 +30,28 @@ interface ShipmentTableProps {
 
 type SortField = 'code' | 'name' | 'weight' | 'cbm' | 'packages' | 'price' | 'sales' | 'shipment';
 type SortOrder = 'asc' | 'desc';
+
+// Small transport-type icon derived from the shipment-code prefix:
+// RA -> air freight (plane), RQ -> sea freight (ship).
+const ShipmentTypeIcon: React.FC<{ shipment: string; className?: string }> = ({ shipment, className = '' }) => {
+  const prefix = String(shipment || '').trim().toUpperCase().slice(0, 2);
+
+  if (prefix === 'RA') {
+    return (
+      <span title="شحنة جوية (RA)" aria-label="شحنة جوية" className={`inline-flex ${className}`}>
+        <Plane className="w-5 h-5 text-amber-500" />
+      </span>
+    );
+  }
+  if (prefix === 'RQ') {
+    return (
+      <span title="شحنة بحرية (RQ)" aria-label="شحنة بحرية" className={`inline-flex ${className}`}>
+        <Ship className="w-5 h-5 text-blue-500" />
+      </span>
+    );
+  }
+  return null;
+};
 
 export const ShipmentTable: React.FC<ShipmentTableProps> = ({
   shipments,
@@ -308,9 +332,12 @@ export const ShipmentTable: React.FC<ShipmentTableProps> = ({
 
                     {/* Shipment */}
                     <td className="py-3 px-3 font-black text-slate-900 whitespace-nowrap">
-                      <span className="bg-slate-100 px-2 py-0.5 rounded font-mono text-slate-800 border border-slate-300">
-                        {row.shipment}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <ShipmentTypeIcon shipment={row.shipment} />
+                        <span className="bg-slate-100 px-2 py-0.5 rounded font-mono text-slate-800 border border-slate-300">
+                          {row.shipment}
+                        </span>
+                      </div>
                     </td>
 
                     {/* Code */}

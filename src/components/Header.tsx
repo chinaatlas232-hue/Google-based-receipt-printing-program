@@ -10,7 +10,8 @@ import {
   PanelLeftOpen,
   RefreshCw,
   CheckCircle2,
-  Wallet
+  Wallet,
+  Warehouse
 } from 'lucide-react';
 import { ActivePage } from '../types';
 import { COMPANY_INFO } from '../data/initialData';
@@ -34,14 +35,14 @@ export const Header: React.FC<HeaderProps> = ({
   isSyncing = false,
   lastSyncTime,
 }) => {
-  const today = new Date().toLocaleDateString('ar-IQ', {
+  const today = new Date().toLocaleDateString('ar-IQ-u-nu-latn', {
     weekday: 'long',
     year: 'numeric',
     month: 'long',
     day: 'numeric'
   });
 
-  const formattedSyncTime = lastSyncTime ? new Date(lastSyncTime).toLocaleTimeString('ar-IQ', {
+  const formattedSyncTime = lastSyncTime ? new Date(lastSyncTime).toLocaleTimeString('ar-IQ-u-nu-latn', {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit'
@@ -148,6 +149,18 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
 
             <button
+              onClick={() => setActivePage('warehouse_inventory')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${
+                activePage === 'warehouse_inventory'
+                  ? 'bg-amber-500 text-slate-950 shadow-md font-extrabold'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
+              }`}
+            >
+              <Warehouse className="w-4 h-4" />
+              <span>جرد المستودعات</span>
+            </button>
+
+            <button
               onClick={() => setActivePage('yard_inventory')}
               className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${
                 activePage === 'yard_inventory'
@@ -156,19 +169,7 @@ export const Header: React.FC<HeaderProps> = ({
               }`}
             >
               <ClipboardList className="w-4 h-4" />
-              <span>جرد الساحة والمستودع</span>
-            </button>
-
-            <button
-              onClick={() => setActivePage('reports')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${
-                activePage === 'reports'
-                  ? 'bg-amber-500 text-slate-950 shadow-md font-extrabold'
-                  : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
-              }`}
-            >
-              <BarChart3 className="w-4 h-4" />
-              <span>تقارير</span>
+              <span>واجهة إخراج البضائع</span>
             </button>
 
             <button
@@ -181,6 +182,18 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <Wallet className="w-4 h-4" />
               <span>واجهة الاستحصالات</span>
+            </button>
+
+            <button
+              onClick={() => setActivePage('reports')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${
+                activePage === 'reports'
+                  ? 'bg-amber-500 text-slate-950 shadow-md font-extrabold'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
+              }`}
+            >
+              <BarChart3 className="w-4 h-4" />
+              <span>تقارير</span>
             </button>
           </nav>
 

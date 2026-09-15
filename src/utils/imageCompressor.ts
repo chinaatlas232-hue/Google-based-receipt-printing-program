@@ -57,8 +57,8 @@ export async function compressImage(
         const sizeKb = Math.round(sizeInBytes / 1024);
 
         const now = new Date();
-        const timeFormatted = now.toLocaleTimeString('ar-IQ', { hour: '2-digit', minute: '2-digit' });
-        const dateFormatted = now.toLocaleDateString('ar-IQ', { month: 'numeric', day: 'numeric' });
+        const timeFormatted = now.toLocaleTimeString('ar-IQ-u-nu-latn', { hour: '2-digit', minute: '2-digit' });
+        const dateFormatted = now.toLocaleDateString('ar-IQ-u-nu-latn', { month: 'numeric', day: 'numeric' });
 
         resolve({
           id: 'photo_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),

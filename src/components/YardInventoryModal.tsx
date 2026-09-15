@@ -1,9 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { X, Printer, ClipboardCheck, FileSpreadsheet, Check } from 'lucide-react';
+import React from 'react';
+import { X, Printer, ClipboardCheck, FileSpreadsheet } from 'lucide-react';
 import { ShipmentRecord } from '../types';
 import { COMPANY_INFO } from '../data/initialData';
 import { exportYardInventoryToExcel } from '../utils/excel';
-import { YARD_INVENTORY_STORAGE_KEY, YardDraftData } from './YardInventoryView';
 
 interface YardInventoryModalProps {
   isOpen: boolean;
@@ -20,47 +19,11 @@ export const YardInventoryModal: React.FC<YardInventoryModalProps> = ({
 }) => {
   if (!isOpen) return null;
 
-  const [actualCounts, setActualCounts] = useState<Record<string, number | ''>>(() => {
-    try {
-      const raw = localStorage.getItem(YARD_INVENTORY_STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as YardDraftData;
-        return parsed.actualCounts || {};
-      }
-    } catch {
-      // ignore
-    }
-    return {};
-  });
+  // This window is a pure PRINT TEMPLATE. It is intentionally stateless and
+  // fetches nothing from the app: no tallied numbers, no checkmarks, no drafts.
+  // The actual tally is entered by hand on paper after printing.
 
-  const [checkedItems, setCheckedItems] = useState<Record<string, boolean>>(() => {
-    try {
-      const raw = localStorage.getItem(YARD_INVENTORY_STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as YardDraftData;
-        return parsed.checkedItems || {};
-      }
-    } catch {
-      // ignore
-    }
-    return {};
-  });
-
-  // Keep localStorage synced if edits are made in modal
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(YARD_INVENTORY_STORAGE_KEY);
-      const existing: YardDraftData = raw ? JSON.parse(raw) : { lastSavedAt: '', checkedItems: {}, actualCounts: {}, itemNotes: {} };
-      existing.actualCounts = { ...existing.actualCounts, ...actualCounts };
-      existing.checkedItems = { ...existing.checkedItems, ...checkedItems };
-      existing.lastSavedAt = new Date().toLocaleTimeString('ar-IQ', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      localStorage.setItem(YARD_INVENTORY_STORAGE_KEY, JSON.stringify(existing));
-    } catch (e) {
-      console.warn('Could not sync modal changes to localStorage', e);
-    }
-  }, [actualCounts, checkedItems]);
-
-  const todayStr = new Date().toLocaleDateString('ar-IQ', {
+  const todayStr = new Date().toLocaleDateString('ar-IQ-u-nu-latn', {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -78,12 +41,10 @@ export const YardInventoryModal: React.FC<YardInventoryModalProps> = ({
     const tableRows = shipments.map((item, idx) => `
       <tr>
         <td style="text-align: center; font-weight: bold;">${idx + 1}</td>
-        <td style="font-weight: bold; font-family: monospace;">${item.code}</td>
+        <td style="font-weight: bold; font-family: monospace; font-size: 16px;">${item.code}</td>
         <td>${item.name} - ${item.address || item.city}</td>
         <td style="text-align: center; font-weight: bold;">${item.packages}</td>
-        <td style="text-align: center; height: 28px;">
-          ${actualCounts[item.id] !== undefined && actualCounts[item.id] !== '' ? actualCounts[item.id] : '[ &nbsp;&nbsp;&nbsp;&nbsp; ]'}
-        </td>
+        <td class="tally-cell">&nbsp;</td>
       </tr>
     `).join('');
 
@@ -102,10 +63,12 @@ export const YardInventoryModal: React.FC<YardInventoryModalProps> = ({
           h2 { margin: 0; font-size: 18px; color: #0f172a; }
           p { margin: 3px 0 0; font-size: 11px; color: #64748b; }
           .info-bar { font-size: 12px; font-weight: bold; margin-bottom: 12px; background: #f1f5f9; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px; display: flex; justify-content: space-between; }
-          table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 5px; }
+          table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 5px; table-layout: fixed; }
           th, td { padding: 6px 8px; border: 1px solid #94a3b8; text-align: right; }
           th { background-color: #0f172a !important; color: #ffffff !important; font-weight: bold; }
           tr:nth-child(even) { background-color: #f8fafc; }
+          .tally-col { background-color: #ffffff !important; }
+          .tally-cell { height: 42px; min-height: 42px; padding: 4px 6px !important; background-color: #ffffff !important; }
           .footer { margin-top: 35px; display: flex; justify-content: space-between; font-size: 12px; font-weight: bold; }
         </style>
       </head>
@@ -122,11 +85,11 @@ export const YardInventoryModal: React.FC<YardInventoryModalProps> = ({
         <table>
           <thead>
             <tr>
-              <th style="width: 7%; text-align: center;">#</th>
-              <th style="width: 15%;">كود العميل</th>
-              <th style="width: 48%;">العميل والعنوان</th>
-              <th style="width: 14%; text-align: center;">الطرود المقيدة</th>
-              <th style="width: 16%; text-align: center;">الجرد الفعلي</th>
+              <th style="width: 4%; text-align: center;">#</th>
+              <th style="width: 12%; font-size: 16px;">كود العميل</th>
+              <th style="width: 34%;">العميل والعنوان</th>
+              <th style="width: 10%; text-align: center;">الطرود المقيدة</th>
+              <th class="tally-col" style="width: 40%; text-align: center;">الجرد الفعلي بالساحة</th>
             </tr>
           </thead>
           <tbody>
@@ -202,52 +165,32 @@ export const YardInventoryModal: React.FC<YardInventoryModalProps> = ({
             <span>تاريخ اليوم: {todayStr}</span>
           </div>
 
-          <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
+          <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-x-auto">
             <table className="w-full text-right text-xs border-collapse font-medium">
               <thead className="bg-slate-800 text-white font-bold">
                 <tr>
                   <th className="py-2.5 px-3 w-10 text-center">#</th>
                   <th className="py-2.5 px-3 w-10 text-center">تحقق</th>
-                  <th className="py-2.5 px-3 w-24">كود العميل</th>
-                  <th className="py-2.5 px-3">العميل والعنوان</th>
-                  <th className="py-2.5 px-3 w-28 text-center">عدد الطرود المقيد</th>
-                  <th className="py-2.5 px-3 w-36 text-center">الجرد الفعلي بالساحة</th>
+                  <th className="py-2.5 px-3 w-20 text-base">كود العميل</th>
+                  <th className="py-2.5 px-3 min-w-[220px]">العميل والعنوان</th>
+                  <th className="py-2.5 px-3 w-20 text-center">عدد الطرود المقيد</th>
+                  <th className="py-2.5 px-3 text-center w-[46%] min-w-[250px]">الجرد الفعلي بالساحة</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {shipments.map((item, index) => {
-                  const isChecked = !!checkedItems[item.id];
                   return (
-                    <tr
-                      key={item.id}
-                      className={`hover:bg-slate-50 transition-colors ${
-                        isChecked ? 'bg-emerald-50/60' : ''
-                      }`}
-                    >
+                    <tr key={item.id} className="hover:bg-slate-50 transition-colors">
                       <td className="py-2 px-3 text-center text-slate-400 font-bold">
                         {index + 1}
                       </td>
 
+                      {/* Blank verification box (paper template only) */}
                       <td className="py-2 px-3 text-center">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setCheckedItems((prev) => ({
-                              ...prev,
-                              [item.id]: !prev[item.id],
-                            }))
-                          }
-                          className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${
-                            isChecked
-                              ? 'bg-emerald-600 border-emerald-600 text-white'
-                              : 'border-slate-300 hover:border-amber-500'
-                          }`}
-                        >
-                          {isChecked && <Check className="w-3.5 h-3.5 stroke-[3]" />}
-                        </button>
+                        <span className="inline-block w-5 h-5 rounded border border-slate-300 bg-white" />
                       </td>
 
-                      <td className="py-2 px-3 font-mono font-bold text-amber-700">
+                      <td className="py-2 px-3 font-mono font-bold text-amber-700 text-[16px]">
                         {item.code}
                       </td>
 
@@ -262,17 +205,9 @@ export const YardInventoryModal: React.FC<YardInventoryModalProps> = ({
                         📦 {item.packages}
                       </td>
 
-                      <td className="py-2 px-3 text-center">
-                        <input
-                          type="number"
-                          placeholder={String(item.packages)}
-                          value={actualCounts[item.id] !== undefined ? actualCounts[item.id] : ''}
-                          onChange={(e) => {
-                            const val = e.target.value === '' ? '' : Number(e.target.value);
-                            setActualCounts((prev) => ({ ...prev, [item.id]: val }));
-                          }}
-                          className="w-20 px-2 py-1 text-center font-mono text-xs border border-slate-300 rounded focus:ring-1 focus:ring-amber-500 focus:border-amber-500"
-                        />
+                      {/* Blank tally box (paper template only) */}
+                      <td className="py-2 px-3">
+                        <div className="w-full min-w-[250px] h-10 rounded border border-slate-300 bg-white" />
                       </td>
                     </tr>
                   );

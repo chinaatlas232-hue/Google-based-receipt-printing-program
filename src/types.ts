@@ -37,7 +37,7 @@ export interface FilterState {
   searchQuery: string;
 }
 
-export type ActivePage = 'dashboard' | 'yard_inventory' | 'reports' | 'debt_collection';
+export type ActivePage = 'dashboard' | 'yard_inventory' | 'warehouse_inventory' | 'reports' | 'debt_collection';
 
 export interface PaymentEntry {
   id: string;

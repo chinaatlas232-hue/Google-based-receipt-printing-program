@@ -30,7 +30,7 @@ export const DispatchApprovalView: React.FC<DispatchApprovalViewProps> = ({ ship
   const [approvals, setApprovals] = useState<Record<string, boolean>>({});
   const [searchQuery, setSearchQuery] = useState('');
 
-  const checkDate = new Date().toLocaleDateString('ar-IQ', {
+  const checkDate = new Date().toLocaleDateString('ar-IQ-u-nu-latn', {
     year: 'numeric',
     month: 'long',
     day: 'numeric'

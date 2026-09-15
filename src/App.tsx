@@ -15,6 +15,7 @@ import { FullReportPrintModal } from './components/FullReportPrintModal';
 import { AddShipmentModal } from './components/AddShipmentModal';
 import { DriveSyncModal } from './components/DriveSyncModal';
 import { YardInventoryView } from './components/YardInventoryView';
+import { WarehouseInventory } from './components/WarehouseInventory';
 import { ShipmentReportsView } from './components/ShipmentReportsView';
 import { DebtCollectionView } from './components/DebtCollectionView';
 import { exportShipmentsToExcel, exportYardInventoryToExcel } from './utils/excel';
@@ -119,7 +120,7 @@ export default function App() {
         }
         setSyncBanner({
           type: 'success',
-          message: `تم بنجاح تحديث وتزامن ${data.count.toLocaleString('ar-IQ')} شحنة مباشرة مع Google Sheets وتحديث كافة الحسابات والأسعار!`
+          message: `تم بنجاح تحديث وتزامن ${data.count.toLocaleString('en-US')} شحنة مباشرة مع Google Sheets وتحديث كافة الحسابات والأسعار!`
         });
         setTimeout(() => setSyncBanner(null), 7000);
       } else {
@@ -499,6 +500,10 @@ export default function App() {
             shipments={shipments} 
             onNavigateToDashboard={() => setActivePage('dashboard')}
           />
+        )}
+
+        {activePage === 'warehouse_inventory' && (
+          <WarehouseInventory shipments={shipments} />
         )}
 
         {activePage === 'reports' && (

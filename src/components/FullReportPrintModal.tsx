@@ -32,13 +32,13 @@ export const FullReportPrintModal: React.FC<FullReportPrintModalProps> = ({
 
   if (!isOpen) return null;
 
-  const todayStr = new Date().toLocaleDateString('ar-IQ', {
+  const todayStr = new Date().toLocaleDateString('ar-IQ-u-nu-latn', {
     year: 'numeric',
     month: 'long',
     day: 'numeric'
   });
 
-  const currentTimeStr = new Date().toLocaleTimeString('ar-IQ', {
+  const currentTimeStr = new Date().toLocaleTimeString('ar-IQ-u-nu-latn', {
     hour: '2-digit',
     minute: '2-digit'
   });

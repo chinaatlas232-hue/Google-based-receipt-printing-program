@@ -11,6 +11,16 @@ interface ReceiptModalProps {
   isBatch?: boolean;
 }
 
+// The pricing unit depends on the shipping mode: sea freight is priced per CBM,
+// air (and land) freight per kilogram.
+const getPriceUnitLabel = (type?: string): string => {
+  const normalized = String(type || '').trim();
+  if (normalized.includes('بحري') || normalized.toLowerCase().includes('sea')) {
+    return 'السعر للمكعب (CBM):';
+  }
+  return 'السعر للكيلو (KG):';
+};
+
 export const ReceiptModal: React.FC<ReceiptModalProps> = ({
   isOpen,
   onClose,
@@ -19,7 +29,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
 }) => {
   if (!isOpen || shipments.length === 0) return null;
 
-  const todayStr = new Date().toLocaleDateString('ar-IQ', {
+  const todayStr = new Date().toLocaleDateString('ar-IQ-u-nu-latn', {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -257,7 +267,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
 
                   <tr>
                     <td colSpan={2} className="p-1.5 border border-slate-300">
-                      <span className="font-bold text-slate-700">السعر للكيلو:</span>{' '}
+                      <span className="font-bold text-slate-700">{getPriceUnitLabel(item.type)}</span>{' '}
                       <span className="font-mono font-semibold">${item.price.toFixed(2)}</span>
                     </td>
                   </tr>
@@ -372,7 +382,7 @@ function renderReceiptHtml(item: ShipmentRecord, todayDate: string): string {
           <td><strong>حجم الشحنة (CBM):</strong> <span style="color: #6b21a8; font-weight: bold;">${item.cbm.toFixed(2)}</span></td>
         </tr>
         <tr>
-          <td colspan="2"><strong>السعر للكيلو:</strong> $${item.price.toFixed(2)}</td>
+          <td colspan="2"><strong>${getPriceUnitLabel(item.type)}</strong> $${item.price.toFixed(2)}</td>
         </tr>
         <tr style="background-color: #fef3c7;">
           <td colspan="2" style="border: 1px solid #f59e0b;">

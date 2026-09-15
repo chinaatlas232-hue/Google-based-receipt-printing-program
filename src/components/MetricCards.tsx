@@ -28,7 +28,7 @@ export const MetricCards: React.FC<MetricCardsProps> = ({
         </div>
         <div className="mt-2.5">
           <div className="text-2xl font-black text-blue-950 font-['Tajawal']">
-            {clientCount.toLocaleString('ar-IQ')} <span className="text-sm font-semibold text-blue-700">عميل</span>
+            {clientCount.toLocaleString('en-US')} <span className="text-sm font-semibold text-blue-700">عميل</span>
           </div>
           <p className="text-[11px] text-blue-600/90 mt-0.5">عملاء الشحنات المحددة</p>
         </div>
@@ -44,7 +44,7 @@ export const MetricCards: React.FC<MetricCardsProps> = ({
         </div>
         <div className="mt-2.5">
           <div className="text-2xl font-black text-emerald-950 font-['Tajawal']">
-            {packagesCount.toLocaleString('ar-IQ')} <span className="text-sm font-semibold text-emerald-700">طرد</span>
+            {packagesCount.toLocaleString('en-US')} <span className="text-sm font-semibold text-emerald-700">طرد</span>
           </div>
           <p className="text-[11px] text-emerald-600/90 mt-0.5">إجمالي الصناديق والطرود</p>
         </div>

@@ -3,21 +3,8 @@ import {
   ClipboardList, 
   Printer, 
   FileSpreadsheet, 
-  Search, 
-  Check, 
-  Warehouse,
-  CheckCircle2,
-  Save,
-  RotateCcw,
-  CheckCheck,
-  AlertTriangle,
-  ArrowRight,
-  Clock,
-  Sparkles,
-  Filter,
-  X,
-  MessageSquare,
-  Eye,
+  Package,
+  Check,
   CheckSquare,
   Square,
   Truck,
@@ -29,12 +16,8 @@ import {
   Radio,
   Users,
   UserCog,
-  RefreshCw,
   ExternalLink,
-  Ship,
-  Plane,
   Calendar,
-  DollarSign,
   ChevronDown,
   MessageCircle,
   Send,
@@ -44,16 +27,22 @@ import {
   ListChecks,
   Tag,
   SlidersHorizontal,
-  TrendingUp,
-  Wallet,
-  Percent,
-  FileText
+  FileText,
+  ArrowRight,
+  CheckCircle2,
+  Eye,
+  Save,
+  Warehouse,
+  X,
+  Search,
+  Filter,
+  Layers
 } from 'lucide-react';
 import { ShipmentRecord } from '../types';
 import { COMPANY_INFO } from '../data/initialData';
 import { exportYardInventoryToExcel } from '../utils/excel';
 
-export const YARD_INVENTORY_STORAGE_KEY = 'ocean_atlas_yard_inventory_draft_v2';
+export const YARD_INVENTORY_STORAGE_KEY = 'ocean_atlas_yard_inventory_draft_v3';
 
 export interface DispatchedInfo {
   dispatched: boolean;
@@ -63,12 +52,22 @@ export interface DispatchedInfo {
   user?: string;
 }
 
+export interface DispatchMovement {
+  id: string;
+  quantity: number;
+  date: string;
+  time: string;
+  fullDateTime: string;
+  user?: string;
+}
+
 export interface YardDraftData {
   lastSavedAt: string;
   checkedItems: Record<string, boolean>;
   actualCounts: Record<string, number | ''>;
   itemNotes: Record<string, string>;
   dispatchedItems?: Record<string, DispatchedInfo>;
+  dispatchMovements?: Record<string, DispatchMovement[]>;
   entryDates?: Record<string, string>;
 }
 
@@ -105,22 +104,13 @@ export function toLatinDigits(val: string | number | null | undefined): string {
     .replace(/[۰-۹]/g, d => String(d.charCodeAt(0) - 1776));
 }
 
-export const getDaysInYard = (item: ShipmentRecord): number => {
-  if (['RQ6025', 'RA6048', 'WA6053', 'RA6057', 'RQ6038'].includes(item.shipment)) {
-    const hash = (item.id + item.code).split('').reduce((acc, c) => acc + c.charCodeAt(0), 0);
-    return 6 + (hash % 8); // 6 to 13 days
-  }
-  if (item.shipment === 'RA6062') return 4;
-  if (item.shipment === 'RA6064') return 2;
-  const hash = item.id.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0);
-  return (hash % 5) + 1; // 1 to 5 days
-};
-
-export const getDefaultEntryDate = (item: ShipmentRecord): string => {
-  const days = getDaysInYard(item);
+// Fallback only: an item that is already in the yard but has no recorded tally
+// date is treated as if it entered today. The real entry date is always the day
+// the physical tally (الجرد الفعلي) was migrated from واجهة جرد المستودعات.
+export const getDefaultEntryDate = (_item: ShipmentRecord): string => {
   const d = new Date();
-  d.setDate(d.getDate() - days);
-  return d.toISOString().slice(0, 10);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 };
 
 export const calculateDaysInYard = (entryDateStr?: string, fallbackItem?: ShipmentRecord): number => {
@@ -142,7 +132,19 @@ export const calculateDaysInYard = (entryDateStr?: string, fallbackItem?: Shipme
       // fallback
     }
   }
-  return fallbackItem ? getDaysInYard(fallbackItem) : 1;
+  if (fallbackItem) return calculateDaysInYard(getDefaultEntryDate(fallbackItem));
+  return 0;
+};
+
+// Render an ISO date (YYYY-MM-DD) as plain text in the YYYY/MM/DD format
+export const formatEntryDate = (isoDate?: string): string => {
+  if (!isoDate) return '—';
+  const parts = String(isoDate).split('-');
+  if (parts.length === 3) {
+    const [y, m, d] = parts;
+    return `${y}/${m.padStart(2, '0')}/${d.padStart(2, '0')}`;
+  }
+  return toLatinDigits(String(isoDate));
 };
 
 interface YardInventoryViewProps {
@@ -154,54 +156,15 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
   shipments, 
   onNavigateToDashboard 
 }) => {
-  // Freight Type Selection: All / Sea / Air
-  const [freightType, setFreightType] = useState<'all' | 'sea' | 'air'>('all');
+  // Shipment selection is fixed to all items (the UI selector was removed)
+  const [selectedShipment] = useState<string>('الكل');
+  const setSelectedShipment = (_value: string) => {};
 
-  const availableShipments = useMemo(() => {
-    let list = shipments;
-    if (freightType === 'sea') {
-      list = list.filter(s => {
-        const sh = (s.shipment || '').toUpperCase();
-        const ty = (s.type || '').toLowerCase();
-        return sh.startsWith('RQ') || sh.includes('RQ') || ty.includes('بحري') || ty.includes('sea') || ty.includes('حاوية');
-      });
-    } else if (freightType === 'air') {
-      list = list.filter(s => {
-        const sh = (s.shipment || '').toUpperCase();
-        const ty = (s.type || '').toLowerCase();
-        return sh.startsWith('RA') || sh.includes('RA') || ty.includes('جوي') || ty.includes('air') || ty.includes('طيران');
-      });
-    }
-    const unique = Array.from(new Set(list.map(s => s.shipment))).filter(Boolean);
-    return unique.sort();
-  }, [shipments, freightType]);
+  // Smart search + filters for the yard dispatch table
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [shipmentFilter, setShipmentFilter] = useState<string>('الكل');
+  const [codeFilter, setCodeFilter] = useState<string>('');
 
-  // Retain last selected shipment and last search query in localStorage (Directive #11 & #12)
-  const [selectedShipment, setSelectedShipment] = useState<string>(() => {
-    return localStorage.getItem('atlas_yard_last_selected_shipment') || 'الكل';
-  });
-
-  const [searchQuery, setSearchQuery] = useState<string>(() => {
-    return localStorage.getItem('atlas_yard_last_search_query') || '';
-  });
-
-  const [shipmentSearchTerm, setShipmentSearchTerm] = useState<string>('');
-  const [isShipmentDropdownOpen, setIsShipmentDropdownOpen] = useState<boolean>(false);
-
-  // Persistence effects for search and shipment
-  useEffect(() => {
-    try {
-      localStorage.setItem('atlas_yard_last_selected_shipment', selectedShipment);
-    } catch {}
-  }, [selectedShipment]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('atlas_yard_last_search_query', searchQuery);
-    } catch {}
-  }, [searchQuery]);
-
-  const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'audited' | 'mismatch' | 'overdue' | 'dispatched' | 'in_yard'>('all');
   const [expandedNotes, setExpandedNotes] = useState<Record<string, boolean>>({});
 
   // User identity & device identifier for cross-device synchronization
@@ -224,8 +187,9 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
   const [isLiveConnected, setIsLiveConnected] = useState<boolean>(false);
   const [recentlyModifiedItems, setRecentlyModifiedItems] = useState<Record<string, { userName: string; time: string; action: string; timestamp: number }>>({});
   const [showUserModal, setShowUserModal] = useState<boolean>(false);
-  const [isSimulating, setIsSimulating] = useState<boolean>(false);
   const lastSyncPollTimestampRef = useRef<number>(Date.now());
+  // When a one-time cleanup runs, we skip merging the stale server state back in
+  const skipServerMergeRef = useRef<boolean>(false);
 
   // 1. Load Draft from localStorage on initialization
   const [checkedItems, setCheckedItems] = useState<Record<string, boolean>>(() => {
@@ -280,6 +244,26 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
     return {};
   });
 
+  // Partial dispatch movements: per-item array of dispatch records (quantity + date/time)
+  const [dispatchMovements, setDispatchMovements] = useState<Record<string, DispatchMovement[]>>(() => {
+    try {
+      const raw = localStorage.getItem(YARD_INVENTORY_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as YardDraftData;
+        return parsed.dispatchMovements || {};
+      }
+    } catch (e) {
+      console.warn('Failed to parse saved dispatch movements', e);
+    }
+    return {};
+  });
+
+  // Controlled input values for the "new dispatch" field of each row
+  const [newDispatchInputs, setNewDispatchInputs] = useState<Record<string, string>>({});
+
+  // Client whose movement-history modal is currently open
+  const [movementHistoryItem, setMovementHistoryItem] = useState<ShipmentRecord | null>(null);
+
   // Entry Dates for each item
   const [entryDates, setEntryDates] = useState<Record<string, string>>(() => {
     try {
@@ -294,17 +278,10 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
     return {};
   });
 
-  // Global Date Picker for unified shipment entry date
-  const [batchEntryDate, setBatchEntryDate] = useState<string>(() => {
-    return new Date().toISOString().slice(0, 10);
-  });
+  // Global batch entry date picker removed: entry dates are fixed and read-only.
 
   // 1. Batch Selection for Bulk Actions
   const [selectedItemIds, setSelectedItemIds] = useState<Record<string, boolean>>({});
-
-  // 2. Advanced Filtering: By Guarantor / Responsible Employee & Financial Status
-  const [selectedGuarantor, setSelectedGuarantor] = useState<string>('الكل');
-  const [financialFilter, setFinancialFilter] = useState<'all' | 'with_debt' | 'zero_debt' | 'high_debt'>('all');
 
   // 3. Client Communication (WhatsApp / Telegram Alerts)
   const [activeMessageClient, setActiveMessageClient] = useState<ShipmentRecord | null>(null);
@@ -360,111 +337,6 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
     '🏷️ ملصق الكود غير واضح'
   ];
 
-  // Synchronize batchEntryDate when selectedShipment changes
-  useEffect(() => {
-    if (selectedShipment && selectedShipment !== 'الكل') {
-      const matchingItem = shipments.find(s => (s.shipment || '').trim() === selectedShipment.trim());
-      if (matchingItem) {
-        const existing = entryDates[matchingItem.id];
-        if (existing) {
-          setBatchEntryDate(existing);
-        } else {
-          setBatchEntryDate(getDefaultEntryDate(matchingItem));
-        }
-      }
-    }
-  }, [selectedShipment, shipments]);
-
-  // Apply unified entry date to all items in current shipment (Global Date Picker)
-  const handleApplyBatchEntryDate = (dateToApply: string) => {
-    if (!dateToApply) return;
-    
-    const targetItems = selectedShipment !== 'الكل'
-      ? shipments.filter(s => (s.shipment || '').trim() === selectedShipment.trim())
-      : filteredItems;
-
-    if (targetItems.length === 0) {
-      setToastMessage('يرجى اختيار شحنة أولاً لتطبيق تاريخ الدخول الموحد لبنودها');
-      return;
-    }
-
-    const updatedEntryDates: Record<string, string> = { ...entryDates };
-    targetItems.forEach(item => {
-      updatedEntryDates[item.id] = dateToApply;
-    });
-
-    setEntryDates(updatedEntryDates);
-
-    const timeStr = toLatinDigits(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-    const dateStr = toLatinDigits(new Date().toISOString().slice(0, 10));
-    const fullTimeStr = `${dateStr} - ${timeStr}`;
-
-    // Immediately save to localStorage draft
-    try {
-      const raw = localStorage.getItem(YARD_INVENTORY_STORAGE_KEY);
-      const prev = raw ? JSON.parse(raw) : {};
-      const updatedDraft = {
-        ...prev,
-        entryDates: updatedEntryDates,
-        lastSavedAt: fullTimeStr
-      };
-      localStorage.setItem(YARD_INVENTORY_STORAGE_KEY, JSON.stringify(updatedDraft));
-      setLastSavedTime(fullTimeStr);
-    } catch (e) {
-      console.warn('Failed to save batch entry dates to draft', e);
-    }
-
-    const daysDiff = calculateDaysInYard(dateToApply);
-    const shipmentLabel = selectedShipment !== 'الكل' ? `الشحنة [${selectedShipment}]` : 'كافة البنود المعروضة';
-    const actionText = `تثبيت تاريخ دخول موحد (${dateToApply}) لـ ${targetItems.length} بند بـ ${shipmentLabel}`;
-
-    // Broadcast to other open browser tabs
-    try {
-      const bc = new BroadcastChannel('atlas_yard_sync_channel');
-      bc.postMessage({
-        type: 'YARD_UPDATE',
-        id: 'bc_batch_' + Date.now(),
-        deviceId,
-        userName: currentUserName,
-        shipment: selectedShipment,
-        action: actionText,
-        time: timeStr,
-        changes: {
-          allSaved: true,
-          entryDates: updatedEntryDates
-        }
-      });
-      bc.close();
-    } catch {}
-
-    // Post to backend server
-    fetch('/api/yard-inventory/batch-entry-date', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        deviceId,
-        userName: currentUserName,
-        shipment: selectedShipment,
-        entryDate: dateToApply,
-        itemIds: targetItems.map(it => it.id),
-        action: actionText
-      })
-    }).catch(() => {
-      fetch('/api/yard-inventory/save-all', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          deviceId,
-          userName: currentUserName,
-          entryDates: updatedEntryDates,
-          action: actionText
-        })
-      }).catch(() => {});
-    });
-
-    setToastMessage(`✅ تم تثبيت تاريخ الدخول الموحد (${dateToApply}) بنجاح على ${targetItems.length} بند بـ ${shipmentLabel} (تساوي ${daysDiff} ${daysDiff === 1 ? 'يوم' : 'أيام'} بالساحة). تم تحديث العدادات تلقائياً.`);
-  };
-
   const [lastSavedTime, setLastSavedTime] = useState<string | null>(() => {
     try {
       const raw = localStorage.getItem(YARD_INVENTORY_STORAGE_KEY);
@@ -478,11 +350,74 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
     return null;
   });
 
-  // 1-minute auto-save timestamp indicator
-  const [lastAutoSaveTime, setLastAutoSaveTime] = useState<string | null>(null);
+  // Entry date = the day the physical tally (الجرد الفعلي) was saved/migrated to
+  // the yard. The removed batch-date tool had stamped every item with one stale
+  // placeholder date, so this one-time repair re-stamps each tallied item with
+  // the actual tally/save day and drops leftovers for untallied items.
+  const entryDateRepairDone = useRef<boolean>(false);
+  useEffect(() => {
+    if (entryDateRepairDone.current) return;
+    if (localStorage.getItem('atlas_yard_entry_date_repair_v1') === 'done') {
+      entryDateRepairDone.current = true;
+      return;
+    }
+
+    const talliedIds = Object.keys(actualCounts).filter(
+      id => actualCounts[id] !== undefined && actualCounts[id] !== ''
+    );
+    if (talliedIds.length === 0) return; // wait until the tally state is loaded
+
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const d = new Date();
+    const todayStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    // Prefer the recorded tally save day over "now" when it is available.
+    const savedDay = (lastSavedTime || '').slice(0, 10);
+    const entryDate = /^\d{4}-\d{2}-\d{2}$/.test(savedDay) ? savedDay : todayStr;
+
+    setEntryDates(() => {
+      const next: Record<string, string> = {};
+      talliedIds.forEach(id => {
+        next[id] = entryDate;
+      });
+      return next;
+    });
+
+    // Persist immediately so the repaired dates stick even if the app closes
+    // before the debounced / periodic auto-save fires.
+    try {
+      const repairTime = new Date();
+      const timeStr = toLatinDigits(repairTime.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      const fullTimeStr = `${entryDate} - ${timeStr}`;
+      const repairedDraft: YardDraftData = {
+        lastSavedAt: fullTimeStr,
+        checkedItems,
+        actualCounts,
+        itemNotes,
+        dispatchedItems,
+        dispatchMovements,
+        entryDates: Object.fromEntries(talliedIds.map(id => [id, entryDate])),
+      };
+      localStorage.setItem(YARD_INVENTORY_STORAGE_KEY, JSON.stringify(repairedDraft));
+      fetch('/api/yard-inventory/save-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          deviceId,
+          userName: currentUserName,
+          draft: repairedDraft,
+          ...repairedDraft,
+          action: 'تصحيح تاريخ الجرد الفعلي (تاريخ الترحيل)',
+        }),
+      }).catch(() => {});
+    } catch (err) {
+      console.warn('Could not persist repaired entry dates', err);
+    }
+
+    localStorage.setItem('atlas_yard_entry_date_repair_v1', 'done');
+    entryDateRepairDone.current = true;
+  }, [actualCounts, lastSavedTime]);
 
   const [saveModalOpen, setSaveModalOpen] = useState(false);
-  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Real-time team collaboration alerts
@@ -601,6 +536,38 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
     }
   };
 
+  // One-time cleanup: ensure the physical tally starts at zero for existing users.
+  // Runs only if an older draft exists in this browser and the cleanup hasn't run yet.
+  useEffect(() => {
+    const MIGRATION_KEY = 'atlas_yard_zero_migration_v4';
+    try {
+      if (localStorage.getItem(MIGRATION_KEY)) return;
+      // Only truly legacy draft keys are considered; the current key may already
+      // hold a valid tally migrated from "جرد المستودعات" and must not be wiped.
+      const legacyDraft =
+        localStorage.getItem('ocean_atlas_yard_inventory_draft_v2') ||
+        localStorage.getItem('ocean_atlas_yard_inventory_draft');
+      if (!legacyDraft) {
+        // Fresh browser: nothing to clean, keep any server-side official data.
+        localStorage.setItem(MIGRATION_KEY, 'fresh');
+        return;
+      }
+      skipServerMergeRef.current = true;
+      setActualCounts({});
+      setCheckedItems({});
+      setDispatchedItems({});
+      setDispatchMovements({});
+      localStorage.setItem(MIGRATION_KEY, 'cleaned');
+      fetch('/api/yard-inventory/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceId, userName: currentUserName })
+      }).catch(() => {});
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+
   // Cross-device server synchronization: initial load + SSE real-time stream + fallback polling
   useEffect(() => {
     let sse: EventSource | null = null;
@@ -608,23 +575,26 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
 
     // 1. Initial fetch from server
     const fetchInitialServerState = async () => {
+      const skipMerge = skipServerMergeRef.current;
       try {
         const res = await fetch('/api/yard-inventory');
         if (res.ok) {
           const data = await res.json();
           if (data.success && data.state) {
             const state = data.state;
-            if (state.checkedItems && Object.keys(state.checkedItems).length > 0) {
-              setCheckedItems(prev => ({ ...state.checkedItems, ...prev }));
-            }
-            if (state.actualCounts && Object.keys(state.actualCounts).length > 0) {
-              setActualCounts(prev => ({ ...state.actualCounts, ...prev }));
+            if (!skipMerge) {
+              if (state.checkedItems && Object.keys(state.checkedItems).length > 0) {
+                setCheckedItems(prev => ({ ...state.checkedItems, ...prev }));
+              }
+              if (state.actualCounts && Object.keys(state.actualCounts).length > 0) {
+                setActualCounts(prev => ({ ...state.actualCounts, ...prev }));
+              }
+              if (state.dispatchedItems && Object.keys(state.dispatchedItems).length > 0) {
+                setDispatchedItems(prev => ({ ...state.dispatchedItems, ...prev }));
+              }
             }
             if (state.itemNotes && Object.keys(state.itemNotes).length > 0) {
               setItemNotes(prev => ({ ...state.itemNotes, ...prev }));
-            }
-            if (state.dispatchedItems && Object.keys(state.dispatchedItems).length > 0) {
-              setDispatchedItems(prev => ({ ...state.dispatchedItems, ...prev }));
             }
             if (state.entryDates && Object.keys(state.entryDates).length > 0) {
               setEntryDates(prev => ({ ...state.entryDates, ...prev }));
@@ -815,87 +785,94 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
     }
   };
 
-  // Toggle dispatched from yard
-  const toggleDispatched = (item: ShipmentRecord) => {
-    const isCurrentlyDispatched = !!dispatchedItems[item.id]?.dispatched;
+  // Dispatch availability is decided per ITEM, not per shipment: shipments arrive
+  // in parts, so any item whose physical tally (الجرد الفعلي) was entered becomes
+  // immediately dispatchable while the rest of the shipment keeps waiting.
+  const isItemTallied = (item: ShipmentRecord): boolean => {
+    const value = actualCounts[item.id];
+    return value !== undefined && value !== '';
+  };
+
+  // Actual tallied quantity of an item (الطرود المجرودة فعلياً)
+  const getCountedQty = (item: ShipmentRecord): number => {
+    const value = actualCounts[item.id];
+    return value !== undefined && value !== '' ? Number(value) || 0 : 0;
+  };
+
+  // Dispatched quantity: derived from the tallied stock only.
+  const getDispatchedQty = (item: ShipmentRecord): number => {
+    if (!isItemTallied(item)) return 0;
+    const counted = getCountedQty(item);
+    const movements = dispatchMovements[item.id] || [];
+    const movedQty = movements.reduce((sum, m) => sum + (Number(m.quantity) || 0), 0);
+    const legacyFull = dispatchedItems[item.id]?.dispatched ? counted : 0;
+    return Math.min(counted, Math.max(movedQty, legacyFull));
+  };
+
+  // Remaining in yard = tallied quantity - dispatched quantity
+  const getRemainingQty = (item: ShipmentRecord): number => {
+    if (!isItemTallied(item)) return 0;
+    return Math.max(0, getCountedQty(item) - getDispatchedQty(item));
+  };
+
+  // Execute a partial dispatch: record the movement and update the remaining balance
+  const handlePartialDispatch = (item: ShipmentRecord) => {
+    if (!isItemTallied(item)) {
+      setToastMessage(`لا يمكن الإخراج: لم يتم جرد البند ${item.code} فعلياً بعد`);
+      return;
+    }
+    const raw = (newDispatchInputs[item.id] || '').replace(/[^\d]/g, '');
+    const quantity = Number(raw);
+    const remaining = getRemainingQty(item);
+
+    if (!raw || quantity <= 0) {
+      setToastMessage(`يرجى إدخال كمية إخراج صحيحة للعميل ${item.code}`);
+      return;
+    }
+    if (quantity > remaining) {
+      setToastMessage(`الكمية المطلوبة (${quantity}) أكبر من المتبقي في الساحة (${remaining}) للعميل ${item.code}`);
+      return;
+    }
+
     const now = new Date();
     const timeStr = toLatinDigits(now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
     const dateStr = toLatinDigits(now.toISOString().slice(0, 10));
     const fullDateTime = `${dateStr} ${timeStr}`;
 
-    const nextState: DispatchedInfo = {
-      dispatched: !isCurrentlyDispatched,
-      time: timeStr,
+    const movement: DispatchMovement = {
+      id: 'mv_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      quantity,
       date: dateStr,
-      fullDateTime: fullDateTime,
+      time: timeStr,
+      fullDateTime,
       user: currentUserName
     };
 
-    setDispatchedItems(prev => {
-      const updated = { ...prev, [item.id]: nextState };
-      return updated;
-    });
+    const updatedMovements = {
+      ...dispatchMovements,
+      [item.id]: [...(dispatchMovements[item.id] || []), movement]
+    };
+    const newRemaining = Math.max(0, remaining - quantity);
 
-    const actionText = !isCurrentlyDispatched 
-      ? `وضع إشارة تم إخراج البضاعة من الساحة (${item.packages} طرد) في [${fullDateTime}]`
-      : `إلغاء إشارة إخراج البضاعة وإعادتها للساحة`;
+    setDispatchMovements(updatedMovements);
+    setNewDispatchInputs(prev => ({ ...prev, [item.id]: '' }));
 
-    setToastMessage(`الشحنة ${item.code}: ${actionText}`);
-    syncItemUpdate(item, actionText, { dispatched: nextState });
+    const nextState: DispatchedInfo = {
+      dispatched: newRemaining === 0,
+      time: timeStr,
+      date: dateStr,
+      fullDateTime,
+      user: currentUserName
+    };
+    setDispatchedItems(prev => ({ ...prev, [item.id]: nextState }));
+
+    const actionText = `إخراج جزئي (${quantity} طرد) للعميل ${item.code} في [${fullDateTime}] - المتبقي بالساحة: ${newRemaining} طرد`;
+    setToastMessage(`تم تنفيذ الإخراج: ${actionText}`);
+    syncItemUpdate(item, actionText, { dispatched: nextState, dispatchMovements: updatedMovements });
   };
 
-  // Interactive Simulation of teammate update from another device
-  const handleSimulateRemoteUpdate = async () => {
-    setIsSimulating(true);
-    const demoTeammates = [
-      'مشرف الساحة (أحمد الموسوي)',
-      'أمين المستودع (علي كاظم)',
-      'مراقب التدقيق (حسين البصري)',
-      'مسؤول تفريغ الحاويات (عمر الورد)'
-    ];
-    const chosenUser = demoTeammates[Math.floor(Math.random() * demoTeammates.length)];
-    const candidate = filteredItems[Math.floor(Math.random() * filteredItems.length)] || baseItems[0];
-    
-    if (!candidate) {
-      setIsSimulating(false);
-      return;
-    }
-
-    const currentCount = actualCounts[candidate.id] !== undefined && actualCounts[candidate.id] !== '' 
-      ? Number(actualCounts[candidate.id]) 
-      : candidate.packages;
-    const newCount = Math.max(1, currentCount + (Math.random() > 0.5 ? 2 : -1));
-    const demoAction = `تعديل ومطابقة الجرد الفعلي إلى (${newCount}) طرد`;
-
-    try {
-      const res = await fetch('/api/yard-inventory/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          deviceId: 'remote_device_simulated_' + Math.random().toString(36).substring(2, 7),
-          userName: chosenUser,
-          itemId: candidate.id,
-          itemCode: candidate.code,
-          customerName: candidate.name,
-          shipment: candidate.shipment,
-          action: demoAction,
-          changes: {
-            actualCount: newCount,
-            checked: true
-          }
-        })
-      });
-      const data = await res.json();
-      if (data.success && data.event) {
-        handleIncomingRemoteEvent(data.event, true);
-        setToastMessage(`🔔 تم استقبال إشعار تفاعلي فوري من جهاز آخر: [${chosenUser}] قام بتعديل (${candidate.code})`);
-      }
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setIsSimulating(false);
-    }
-  };
+  // Teammate-update simulation removed: it wrote to the physical tally, which is now
+  // read-only in this view and can only be edited from واجهة جرد المستودعات.
 
   // 3. Automatic background synchronization to localStorage
   useEffect(() => {
@@ -912,6 +889,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
           actualCounts,
           itemNotes,
           dispatchedItems,
+          dispatchMovements,
           entryDates
         };
         localStorage.setItem(YARD_INVENTORY_STORAGE_KEY, JSON.stringify(draft));
@@ -922,7 +900,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
     }, 400);
 
     return () => clearTimeout(timer);
-  }, [checkedItems, actualCounts, itemNotes, dispatchedItems, entryDates]);
+  }, [checkedItems, actualCounts, itemNotes, dispatchedItems, dispatchMovements, entryDates]);
 
   // 1-minute periodic auto-save to localStorage and backend (Directive #6)
   useEffect(() => {
@@ -939,11 +917,11 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
           actualCounts,
           itemNotes,
           dispatchedItems,
+          dispatchMovements,
           entryDates
         };
         localStorage.setItem(YARD_INVENTORY_STORAGE_KEY, JSON.stringify(draft));
         setLastSavedTime(fullTimeStr);
-        setLastAutoSaveTime(timeStr);
 
         fetch('/api/yard-inventory/save-all', {
           method: 'POST',
@@ -956,6 +934,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
             actualCounts,
             itemNotes,
             dispatchedItems,
+            dispatchMovements,
             entryDates,
             action: 'حفظ تلقائي دوري كل 1 دقيقة'
           })
@@ -966,7 +945,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
     }, 60000); // 1 minute interval
 
     return () => clearInterval(autoSaveInterval);
-  }, [checkedItems, actualCounts, itemNotes, dispatchedItems, entryDates, deviceId, currentUserName]);
+  }, [checkedItems, actualCounts, itemNotes, dispatchedItems, dispatchMovements, entryDates, deviceId, currentUserName]);
 
   // Flash toast and active alert auto-dismiss
   useEffect(() => {
@@ -981,58 +960,10 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
     return () => clearTimeout(t);
   }, [activeAlert]);
 
-  // Unique list of guarantors for advanced filtering
-  const availableGuarantors = useMemo(() => {
-    const set = new Set<string>();
-    shipments.forEach(s => {
-      if (s.guarantor && s.guarantor.trim()) {
-        set.add(s.guarantor.trim());
-      }
-    });
-    return Array.from(set).sort();
-  }, [shipments]);
-
-  // 3. Computed items with Advanced Filtering (Guarantor & Financial Status)
+  // Items for the current shipment scope (all items)
   const baseItems = useMemo(() => {
-    return shipments.filter(s => {
-      // Freight type filtering
-      if (freightType === 'sea') {
-        const sh = (s.shipment || '').toUpperCase();
-        const ty = (s.type || '').toLowerCase();
-        const isSea = sh.startsWith('RQ') || sh.includes('RQ') || ty.includes('بحري') || ty.includes('sea') || ty.includes('حاوية');
-        if (!isSea) return false;
-      } else if (freightType === 'air') {
-        const sh = (s.shipment || '').toUpperCase();
-        const ty = (s.type || '').toLowerCase();
-        const isAir = sh.startsWith('RA') || sh.includes('RA') || ty.includes('جوي') || ty.includes('air') || ty.includes('طيران');
-        if (!isAir) return false;
-      }
-
-      const matchShip = selectedShipment === 'الكل' || s.shipment === selectedShipment;
-      const matchSearch = searchQuery.trim() === '' ||
-        s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        s.code.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        s.city.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (s.guarantor && s.guarantor.toLowerCase().includes(searchQuery.toLowerCase())) ||
-        (s.address && s.address.toLowerCase().includes(searchQuery.toLowerCase()));
-
-      // Filter by Guarantor / Responsible employee
-      const matchGuarantor = selectedGuarantor === 'الكل' || (s.guarantor && s.guarantor.trim() === selectedGuarantor.trim());
-
-      // Filter by Financial Status
-      let matchFinancial = true;
-      const amount = Number(s.sales || 0);
-      if (financialFilter === 'with_debt') {
-        matchFinancial = amount > 0;
-      } else if (financialFilter === 'zero_debt') {
-        matchFinancial = amount === 0;
-      } else if (financialFilter === 'high_debt') {
-        matchFinancial = amount >= 500;
-      }
-
-      return matchShip && matchSearch && matchGuarantor && matchFinancial;
-    });
-  }, [shipments, selectedShipment, searchQuery, freightType, selectedGuarantor, financialFilter]);
+    return shipments.filter(s => selectedShipment === 'الكل' || s.shipment === selectedShipment);
+  }, [shipments, selectedShipment]);
 
   // Calculate days in yard with live entryDate support
   const getItemDays = (s: ShipmentRecord) => {
@@ -1045,8 +976,6 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
   const auditedItemsCount = useMemo(() => {
     return baseItems.filter(s => !!checkedItems[s.id] || (actualCounts[s.id] !== undefined && actualCounts[s.id] !== '')).length;
   }, [baseItems, checkedItems, actualCounts]);
-
-  const pendingItemsCount = totalItemsCount - auditedItemsCount;
 
   const mismatchItemsCount = useMemo(() => {
     return baseItems.filter(s => {
@@ -1063,29 +992,54 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
     return baseItems.filter(s => !!dispatchedItems[s.id]?.dispatched).length;
   }, [baseItems, dispatchedItems]);
 
-  const inYardItemsCount = useMemo(() => {
-    return baseItems.filter(s => !dispatchedItems[s.id]?.dispatched).length;
-  }, [baseItems, dispatchedItems]);
+  // The dispatch table starts completely empty. An item only appears once its
+  // physical tally (الجرد الفعلي) has been migrated from the inventory system.
+  // No dummy / hardcoded data is used to populate this table.
+  const migratedItems = useMemo(() => {
+    return baseItems.filter(
+      item => actualCounts[item.id] !== undefined && actualCounts[item.id] !== ''
+    );
+  }, [baseItems, actualCounts]);
 
+  // Shipment codes available in the migrated (tallied) yard items, for the filter dropdown
+  const availableShipmentCodes = useMemo(() => {
+    const codes = new Set<string>();
+    migratedItems.forEach(item => {
+      if (item.shipment) codes.add(item.shipment);
+    });
+    return Array.from(codes).sort();
+  }, [migratedItems]);
+
+  // Smart filtering: comprehensive search (name, address, notes, code, shipment)
+  // combined with the shipment-code and customer-code filters.
   const filteredItems = useMemo(() => {
-    return baseItems.filter(item => {
-      const isChecked = !!checkedItems[item.id];
-      const act = actualCounts[item.id];
-      const hasActual = act !== undefined && act !== '';
-      const isAudited = isChecked || hasActual;
-      const isMismatch = hasActual && Number(act) !== item.packages;
-      const isOverdue = getItemDays(item) > 5 && !dispatchedItems[item.id]?.dispatched;
-      const isDispatched = !!dispatchedItems[item.id]?.dispatched;
+    const query = searchQuery.trim().toLowerCase();
+    const codeQuery = codeFilter.trim().toLowerCase();
 
-      if (filterStatus === 'audited') return isAudited;
-      if (filterStatus === 'pending') return !isAudited;
-      if (filterStatus === 'mismatch') return isMismatch;
-      if (filterStatus === 'overdue') return isOverdue;
-      if (filterStatus === 'dispatched') return isDispatched;
-      if (filterStatus === 'in_yard') return !isDispatched;
+    return migratedItems.filter(item => {
+      if (shipmentFilter !== 'الكل' && item.shipment !== shipmentFilter) return false;
+
+      if (codeQuery && !String(item.code || '').toLowerCase().includes(codeQuery)) return false;
+
+      if (query) {
+        const haystack = [
+          item.name,
+          item.address,
+          item.city,
+          item.code,
+          item.shipment,
+          item.guarantor,
+          itemNotes[item.id],
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        if (!haystack.includes(query)) return false;
+      }
+
       return true;
     });
-  }, [baseItems, filterStatus, checkedItems, actualCounts, dispatchedItems, entryDates]);
+  }, [migratedItems, searchQuery, shipmentFilter, codeFilter, itemNotes]);
 
   // Financial KPIs & Visual Summary Calculations
   const totalFilteredSales = useMemo(() => {
@@ -1152,38 +1106,8 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
     }));
   };
 
-  // Batch Action 1: Approve Audit and Match for all selected
-  const handleBatchApproveAudit = () => {
-    const selectedList = filteredItems.filter(it => selectedItemIds[it.id]);
-    if (selectedList.length === 0) return;
-
-    const newChecks = { ...checkedItems };
-    const newCounts = { ...actualCounts };
-
-    selectedList.forEach(item => {
-      newChecks[item.id] = true;
-      newCounts[item.id] = item.packages;
-    });
-
-    setCheckedItems(newChecks);
-    setActualCounts(newCounts);
-    setSelectedItemIds({});
-
-    const actionText = `اعتماد تدقيق ومطابقة جماعية لـ (${selectedList.length}) طرد بنجاح`;
-    setToastMessage(`✅ ${actionText}`);
-
-    fetch('/api/yard-inventory/save-all', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        deviceId,
-        userName: currentUserName,
-        checkedItems: newChecks,
-        actualCounts: newCounts,
-        action: actionText
-      })
-    }).catch(() => {});
-  };
+  // Batch Action 1 (approve audit) removed: the physical tally is read-only in this view.
+  // The actual count is entered and migrated from واجهة جرد المستودعات only.
 
   // Batch Action 2: Mark Yard Dispatch for all selected
   const handleBatchMarkDispatch = () => {
@@ -1224,34 +1148,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
     }).catch(() => {});
   };
 
-  // Batch Action 3: Apply Entry Date to Selected Items
-  const handleBatchApplyDateToSelected = (dateToApply: string) => {
-    const selectedList = filteredItems.filter(it => selectedItemIds[it.id]);
-    if (selectedList.length === 0 || !dateToApply) return;
-
-    const updatedEntryDates: Record<string, string> = { ...entryDates };
-    selectedList.forEach(item => {
-      updatedEntryDates[item.id] = dateToApply;
-    });
-
-    setEntryDates(updatedEntryDates);
-    setSelectedItemIds({});
-
-    const actionText = `تطبيق تاريخ دخول (${dateToApply}) على (${selectedList.length}) طرد محدد`;
-    setToastMessage(`📅 ${actionText}`);
-
-    fetch('/api/yard-inventory/batch-entry-date', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        deviceId,
-        userName: currentUserName,
-        entryDate: dateToApply,
-        itemIds: selectedList.map(it => it.id),
-        action: actionText
-      })
-    }).catch(() => {});
-  };
+  // Batch Action 3 (apply entry date) removed: entry dates are fixed and read-only here.
 
   // Generate Smart Pre-formatted Notification Messages for Clients
   const getPreformattedMessage = (item: ShipmentRecord, type: 'ready' | 'overdue' | 'mismatch' | 'debt'): string => {
@@ -1262,11 +1159,11 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
     const debt = Number(item.sales || 0);
 
     if (type === 'ready') {
-      return `السلام عليكم ورحمة الله وبركاته، الأخ الكريم / ${item.name} المحترم.\nتحية طيبة من شركة أطلس المحيط للشحن الدولي والتخليص الجمركي 🚢✈️.\n\nيسرنا إعلامكم بأن بضاعتكم شحنة [${item.shipment}] بالكود [${item.code}] بعدد (${item.packages} طرد) جاهزة ومفحوصة للاستلام في ساحة ومستودع الشركة.\nالمبلغ المستحق: $${debt.toLocaleString()}\nالعنوان: ${item.address || item.city}\n\nيرجى التفضل بالحضور للاستلام، مع خالص التقدير.`;
+      return `السلام عليكم ورحمة الله وبركاته، الأخ الكريم / ${item.name} المحترم.\nتحية طيبة من شركة أطلس المحيط للشحن الدولي والتخليص الجمركي 🚢✈️.\n\nيسرنا إعلامكم بأن بضاعتكم شحنة [${item.shipment}] بالكود [${item.code}] بعدد (${item.packages} طرد) جاهزة ومفحوصة للاستلام في ساحة ومستودع الشركة.\nالمبلغ المستحق: $${debt.toLocaleString('en-US')}\nالعنوان: ${item.address || item.city}\n\nيرجى التفضل بالحضور للاستلام، مع خالص التقدير.`;
     }
 
     if (type === 'overdue') {
-      return `تنبيه ومتابعة بضاعة في الساحة - شركة أطلس المحيط.\nالأخ الكريم / ${item.name} المحترم (الكود: ${item.code}).\n\nنود لفت عنايتكم الكريمة إلى أن بضاعتكم في شحنة [${item.shipment}] بعدد (${item.packages} طرد) متواجدة في ساحة الشركة منذ (${days} أيام).\nنرجو التكرم بالتنسيق واستلام البضاعة بأقرب وقت لتفادي أي رسوم تخزين إضافية.\nالمبلغ المستحق: $${debt.toLocaleString()}\nللتواصل والاستفسار يرجى الرد على هذه الرسالة. شكراً لتعاونكم.`;
+      return `تنبيه ومتابعة بضاعة في الساحة - شركة أطلس المحيط.\nالأخ الكريم / ${item.name} المحترم (الكود: ${item.code}).\n\nنود لفت عنايتكم الكريمة إلى أن بضاعتكم في شحنة [${item.shipment}] بعدد (${item.packages} طرد) متواجدة في ساحة الشركة منذ (${days} أيام).\nنرجو التكرم بالتنسيق واستلام البضاعة بأقرب وقت لتفادي أي رسوم تخزين إضافية.\nالمبلغ المستحق: $${debt.toLocaleString('en-US')}\nللتواصل والاستفسار يرجى الرد على هذه الرسالة. شكراً لتعاونكم.`;
     }
 
     if (type === 'mismatch') {
@@ -1276,7 +1173,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
     }
 
     // debt
-    return `تذكير بالمطالبة المالية - شركة أطلس المحيط.\nالأخ الكريم / ${item.name} المحترم (الكود: ${item.code}).\n\nنرجو التكرم بالعلم بأن المبلغ المستحق على شحنتكم [${item.shipment}] بعدد (${item.packages} طرد) هو: $${debt.toLocaleString()}.\nيرجى تسديد المبلغ عند الاستلام أو التنسيق مع القسم المالي.\nشاكرين ومقدرين حسن تعاملكم.`;
+    return `تذكير بالمطالبة المالية - شركة أطلس المحيط.\nالأخ الكريم / ${item.name} المحترم (الكود: ${item.code}).\n\nنرجو التكرم بالعلم بأن المبلغ المستحق على شحنتكم [${item.shipment}] بعدد (${item.packages} طرد) هو: $${debt.toLocaleString('en-US')}.\nيرجى تسديد المبلغ عند الاستلام أو التنسيق مع القسم المالي.\nشاكرين ومقدرين حسن تعاملكم.`;
   };
 
   // Set message text when opening client message modal or changing template
@@ -1320,7 +1217,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
         <tr style="${isMismatch ? 'background-color: #fff1f2;' : (isChecked ? 'background-color: #f0fdf4;' : '')}">
           <td style="text-align: center; font-weight: bold;">${idx + 1}</td>
           <td style="font-weight: bold; font-family: monospace; color: #b45309;">${item.code}</td>
-          <td style="text-align: center; font-weight: 800; color: #047857; font-family: monospace;">$${Number(item.sales || 0).toLocaleString()}</td>
+          <td style="text-align: center; font-weight: 800; color: #047857; font-family: monospace;">$${Number(item.sales || 0).toLocaleString('en-US')}</td>
           <td style="font-size: 10px;">${item.guarantor || '—'}</td>
           <td>
             <b>${item.name}</b>
@@ -1374,11 +1271,11 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
           <div>
             <h2>${COMPANY_INFO.nameAr}</h2>
             <div style="font-size: 11px; color: #64748b; font-weight: bold; margin-top: 2px;">
-              تقرير جرد الساحة والتدقيق المحاسبي المعتمد - الشحنة: [${selectedShipment}] (${freightType === 'sea' ? 'بحري' : freightType === 'air' ? 'جوي' : 'عام'})
+              تقرير جرد الساحة والتدقيق المحاسبي المعتمد - الشحنة: [${selectedShipment}]
             </div>
           </div>
           <div style="text-align: left; font-size: 10px; color: #475569;">
-            <div>تاريخ التقرير: <b>${new Date().toLocaleDateString('ar-IQ')}</b></div>
+            <div>تاريخ التقرير: <b>${new Date().toLocaleDateString('ar-IQ-u-nu-latn')}</b></div>
             <div>اسم المدقق: <b>${currentUserName}</b></div>
           </div>
         </div>
@@ -1386,15 +1283,15 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
         <div class="kpi-grid">
           <div class="kpi-card">
             <div class="kpi-title">إجمالي المبالغ والديون ($)</div>
-            <div class="kpi-val" style="color: #047857;">$${totalFilteredSales.toLocaleString()}</div>
+            <div class="kpi-val" style="color: #047857;">$${totalFilteredSales.toLocaleString('en-US')}</div>
           </div>
           <div class="kpi-card">
             <div class="kpi-title">المبالغ المحصلة / المخرجة ($)</div>
-            <div class="kpi-val" style="color: #0284c7;">$${dispatchedSales.toLocaleString()}</div>
+            <div class="kpi-val" style="color: #0284c7;">$${dispatchedSales.toLocaleString('en-US')}</div>
           </div>
           <div class="kpi-card">
             <div class="kpi-title">الديون المتبقية بالساحة ($)</div>
-            <div class="kpi-val" style="color: #b45309;">$${remainingInYardSales.toLocaleString()}</div>
+            <div class="kpi-val" style="color: #b45309;">$${remainingInYardSales.toLocaleString('en-US')}</div>
           </div>
           <div class="kpi-card">
             <div class="kpi-title">إجمالي الطرود المقيدة / الفعلية</div>
@@ -1451,10 +1348,6 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
     const act = actualCounts[s.id];
     return sum + (act !== undefined && act !== '' ? Number(act) : s.packages);
   }, 0);
-
-  const progressPercentage = totalItemsCount > 0 
-    ? Math.round((auditedItemsCount / totalItemsCount) * 100) 
-    : 0;
 
   const todayStr = toLatinDigits(new Date().toISOString().slice(0, 10));
 
@@ -1542,55 +1435,8 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
     }
   };
 
-  // Mark all visible items as matching
-  const handleMarkAllVisibleMatching = () => {
-    const updatedChecks = { ...checkedItems };
-    const updatedCounts = { ...actualCounts };
-    filteredItems.forEach(item => {
-      updatedChecks[item.id] = true;
-      updatedCounts[item.id] = item.packages;
-    });
-    setCheckedItems(updatedChecks);
-    setActualCounts(updatedCounts);
-    setToastMessage(`تم ضبط (${filteredItems.length}) بند مطابقاً للطرود المقيدة.`);
-    
-    // Broadcast action
-    if (filteredItems[0]) {
-      syncItemUpdate(filteredItems[0], `ضبط كافة البنود المرئية (${filteredItems.length} بند) كبنود مطابقة`, {
-        bulkUpdate: true
-      });
-    }
-  };
-
-  // Reset inventory for current view
-  const handleConfirmReset = () => {
-    const updatedChecks = { ...checkedItems };
-    const updatedCounts = { ...actualCounts };
-    const updatedNotes = { ...itemNotes };
-
-    baseItems.forEach(item => {
-      delete updatedChecks[item.id];
-      delete updatedCounts[item.id];
-      delete updatedNotes[item.id];
-    });
-
-    setCheckedItems(updatedChecks);
-    setActualCounts(updatedCounts);
-    setItemNotes(updatedNotes);
-    setResetConfirmOpen(false);
-    setToastMessage(`تمت إعادة ضبط مسودة الجرد للشحنة [${selectedShipment}] بنجاح.`);
-
-    // Reset in server
-    fetch('/api/yard-inventory/reset', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        deviceId,
-        userName: currentUserName,
-        shipment: selectedShipment
-      })
-    }).catch(err => console.warn('Sync reset error:', err));
-  };
+  // Reset handler removed: the physical tally is read-only in this view and can only
+  // be cleared from واجهة جرد المستودعات, so no local reset of these numbers is allowed.
 
   // Print Handler
   const handlePrint = () => {
@@ -1600,30 +1446,20 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
       return;
     }
 
+    // This sheet is a BLANK PRINT TEMPLATE for manual pen entry in the yard.
+    // It intentionally prints no tallied numbers, no match status and no notes.
     const tableRows = filteredItems.map((item, idx) => {
-      const act = actualCounts[item.id];
-      const hasActual = act !== undefined && act !== '';
-      const isChecked = !!checkedItems[item.id];
-      const note = itemNotes[item.id] || '';
-      const displayActual = hasActual ? act : item.packages;
-      const isMismatch = hasActual && Number(act) !== item.packages;
-
       return `
-        <tr style="${isMismatch ? 'background-color: #fff1f2;' : (isChecked ? 'background-color: #f0fdf4;' : '')}">
+        <tr>
           <td style="text-align: center; font-weight: bold;">${idx + 1}</td>
-          <td style="font-weight: bold; font-family: monospace;">${item.code}</td>
+          <td style="font-weight: bold; font-family: monospace; font-size: 16px;">${item.code}</td>
           <td>
             <b>${item.name}</b>
             <div style="font-size: 10px; color: #475569;">${item.address || item.city}</div>
-            ${note ? `<div style="font-size: 9.5px; color: #991b1b; margin-top: 2px;">ملاحظة: ${note}</div>` : ''}
           </td>
           <td style="text-align: center; font-weight: bold;">${item.packages}</td>
-          <td style="text-align: center; font-weight: bold; font-family: monospace; ${isMismatch ? 'color: #dc2626;' : 'color: #166534;'}">
-            ${displayActual}
-          </td>
-          <td style="text-align: center; font-size: 10px; font-weight: bold;">
-            ${isMismatch ? `<span style="color: #b91c1c;">فرق (${Number(displayActual) - item.packages})</span>` : (isChecked ? '<span style="color: #15803d;">مطابق ومفحوص</span>' : '<span style="color: #64748b;">مسودة</span>')}
-          </td>
+          <td class="blank-cell"></td>
+          <td class="blank-cell"></td>
         </tr>
       `;
     }).join('');
@@ -1643,33 +1479,33 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
           h2 { margin: 0; font-size: 18px; color: #0f172a; }
           p { margin: 3px 0 0; font-size: 11px; color: #64748b; }
           .info-bar { font-size: 12px; font-weight: bold; margin-bottom: 12px; background: #f1f5f9; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px; display: flex; justify-content: space-between; }
-          table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 5px; }
+          table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 5px; table-layout: fixed; }
           th, td { padding: 6px 8px; border: 1px solid #94a3b8; text-align: right; }
           th { background-color: #1e293b !important; color: #ffffff !important; font-weight: bold; }
           tr:nth-child(even) { background-color: #f8fafc; }
+          .blank-cell { height: 42px; min-height: 42px; background-color: #ffffff !important; }
           .footer { margin-top: 35px; display: flex; justify-content: space-between; font-size: 12px; font-weight: bold; }
         </style>
       </head>
       <body>
         <div class="header-box">
           <h2>${COMPANY_INFO.nameAr}</h2>
-          <p>نموذج ومحضر جرد الساحة والمستودع الفعلي (A4) - ${lastSavedTime ? `آخر حفظ: ${lastSavedTime}` : ''}</p>
+          <p>نموذج ومحضر جرد الساحة والمستودع الفعلي (A4) — قالب للتدوين اليدوي</p>
         </div>
         <div class="info-bar">
           <div>الشحنة: <b>${selectedShipment}</b></div>
           <div>تاريخ الجرد: <b>${todayStr}</b></div>
           <div>الطرود المقيدة: <b>${totalExpectedPackages} طرد</b></div>
-          <div>الطرود المحصورة فعلياً: <b>${totalActualPackages} طرد</b></div>
         </div>
         <table>
           <thead>
             <tr>
               <th style="width: 6%; text-align: center;">#</th>
               <th style="width: 14%;">كود العميل</th>
-              <th style="width: 44%;">العميل والعنوان وملاحظات الساحة</th>
+              <th style="width: 42%;">العميل والعنوان</th>
               <th style="width: 12%; text-align: center;">الطرود المقيدة</th>
-              <th style="width: 12%; text-align: center;">الجرد الفعلي</th>
-              <th style="width: 12%; text-align: center;">حالة المطابقة</th>
+              <th style="width: 13%; text-align: center;">الجرد الفعلي بالساحة</th>
+              <th style="width: 13%; text-align: center;">الفرق / ملاحظات</th>
             </tr>
           </thead>
           <tbody>
@@ -1776,7 +1612,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
             <div>
               <div className="flex items-center gap-2 flex-wrap">
                 <h2 className="text-base sm:text-lg font-black text-slate-900 font-['Cairo']">
-                  شيت جرد الساحة والمستودع (Yard Inventory & Tally)
+                  واجهة إخراج البضائع
                 </h2>
                 {isLiveConnected ? (
                   <span className="text-[11px] bg-emerald-50 text-emerald-800 border border-emerald-300 px-2.5 py-0.5 rounded-full font-bold flex items-center gap-1.5">
@@ -1801,7 +1637,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                 </button>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
-                تدقيق ومطابقة عدد الطرود الفعلية في الساحة لكل عميل، مع إشعارات فورية مباشرة عند تعديل أي جهاز لمنع تداخل البيانات
+                إدارة إخراج الطرود الجزئي للعملاء وتتبع حركة الإخراج، مع احتساب المتبقي في الساحة تلقائياً
               </p>
             </div>
           </div>
@@ -2045,30 +1881,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                         </span>
                       </button>
 
-                      {/* 8. Teammate Simulation */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsToolsDropdownOpen(false);
-                          handleSimulateRemoteUpdate();
-                        }}
-                        disabled={isSimulating}
-                        className="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-amber-50 text-slate-700 hover:text-amber-950 transition-colors text-right cursor-pointer group"
-                      >
-                        <div className="flex items-center gap-2.5">
-                          <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-800 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                            {isSimulating ? (
-                              <RefreshCw className="w-4 h-4 animate-spin" />
-                            ) : (
-                              <Radio className="w-4 h-4" />
-                            )}
-                          </div>
-                          <div>
-                            <div className="text-xs font-bold text-slate-900 group-hover:text-amber-950">تجربة تنبيه من جهاز آخر</div>
-                            <div className="text-[10px] text-slate-500">محاكاة تعديل فوري واختبار الإشعار الصوتي</div>
-                          </div>
-                        </div>
-                      </button>
+                      {/* 8. Teammate Simulation removed: tally is read-only in this view */}
 
                       {/* 9. Sound Toggle */}
                       <button
@@ -2102,32 +1915,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                       </button>
                     </div>
 
-                    {/* Section 3: Reset & Maintenance */}
-                    <div className="space-y-1 pt-2">
-                      <div className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                        خيارات وإعادة الضبط
-                      </div>
-
-                      {/* 10. Reset Draft */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsToolsDropdownOpen(false);
-                          setResetConfirmOpen(true);
-                        }}
-                        className="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-rose-50 text-slate-700 hover:text-rose-700 transition-colors text-right cursor-pointer group"
-                      >
-                        <div className="flex items-center gap-2.5">
-                          <div className="w-8 h-8 rounded-lg bg-rose-100 text-rose-600 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                            <RotateCcw className="w-4 h-4" />
-                          </div>
-                          <div>
-                            <div className="text-xs font-bold text-slate-900 group-hover:text-rose-700">تفريغ المسودة وإعادة الضبط</div>
-                            <div className="text-[10px] text-slate-500">مسح المدخلات غير المحفوظة لهذه الشحنة</div>
-                          </div>
-                        </div>
-                      </button>
-                    </div>
+                    {/* Section 3 removed: no local reset of the migrated tally numbers */}
                   </div>
                 </div>
               )}
@@ -2135,645 +1923,8 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
           </div>
         </div>
 
-        {/* Audit Progress & Storage Status Bar with 1-Minute Auto-Save */}
-        <div className="mt-4 bg-slate-50 border border-slate-200/90 rounded-xl p-3 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
-          <div className="flex items-center gap-3">
-            <span className="font-bold text-slate-700">نسبة إنجاز الجرد:</span>
-            <div className="w-36 sm:w-48 bg-slate-200 rounded-full h-3 overflow-hidden shadow-inner">
-              <div 
-                className={`h-full transition-all duration-500 rounded-full ${
-                  progressPercentage === 100 ? 'bg-emerald-500' : 'bg-gradient-to-r from-amber-500 to-emerald-500'
-                }`}
-                style={{ width: `${progressPercentage}%` }}
-              />
-            </div>
-            <span className="font-mono font-extrabold text-slate-900">{progressPercentage}%</span>
-            <span className="text-slate-500 text-[11px]">
-              ({auditedItemsCount} من أصل {totalItemsCount} بند تم جردها)
-            </span>
-          </div>
+        {/* الإخراج متاح لكل بند تم جرده فعلياً — البنود غير المجرودة لا تظهر حتى يتم جردها */}
 
-          <div className="flex flex-wrap items-center gap-2 text-[11px]">
-            {/* Live 1-Minute Auto-Save Pill (Directive #6) */}
-            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-900 font-bold">
-              <RefreshCw className="w-3 h-3 text-emerald-600 animate-spin" style={{ animationDuration: '6s' }} />
-              <span>حفظ تلقائي كل 1 دقيقة: <b className="font-mono text-emerald-950">{lastAutoSaveTime || 'نشط'}</b></span>
-            </div>
-
-            <div className="flex items-center gap-1 text-slate-600 font-medium">
-              <Clock className="w-3.5 h-3.5 text-slate-400" />
-              <span>
-                {lastSavedTime ? (
-                  <>آخر حفظ: <b className="text-slate-900 font-mono">{lastSavedTime}</b></>
-                ) : (
-                  'المتصفح جاهز للحفظ'
-                )}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* 🌟 مؤشرات الأداء المالي والإحصائي (KPIs & Financial Summary) */}
-        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 font-['Cairo']">
-          {/* Card 1: إجمالي المبالغ والديون المستحقة المعروضة */}
-          <div className="bg-gradient-to-br from-slate-900 to-slate-800 text-white rounded-xl p-3.5 border border-slate-700 shadow-sm relative overflow-hidden">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold text-amber-400 flex items-center gap-1">
-                <Wallet className="w-3.5 h-3.5" />
-                <span>إجمالي مبالغ البنود المعروضة ($)</span>
-              </span>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700 font-mono">
-                {filteredItems.length} بند
-              </span>
-            </div>
-            <div className="mt-2 flex items-baseline gap-2">
-              <span className="text-2xl font-black font-mono text-emerald-400">
-                ${totalFilteredSales.toLocaleString()}
-              </span>
-              {selectedShipment !== 'الكل' && totalShipmentSales > totalFilteredSales && (
-                <span className="text-[10px] text-slate-400">
-                  من أصل <b className="font-mono">${totalShipmentSales.toLocaleString()}</b>
-                </span>
-              )}
-            </div>
-            <div className="mt-2 text-[10px] text-slate-300 flex items-center justify-between border-t border-slate-700/80 pt-1.5">
-              <span>عملاء عليهم مستحقات مالية:</span>
-              <span className="font-bold text-amber-300 font-mono">{clientsWithDebtsCount} عميل</span>
-            </div>
-          </div>
-
-          {/* Card 2: المبالغ المحصلة (المُخرجة) مقابل المتبقية بالساحة */}
-          <div className="bg-white rounded-xl p-3.5 border border-slate-200 shadow-xs flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between text-slate-600 text-[11px] font-bold">
-                <span className="flex items-center gap-1">
-                  <TrendingUp className="w-3.5 h-3.5 text-cyan-600" />
-                  <span>المحصل (المُخرج) مقابل المتبقي</span>
-                </span>
-                <span className="font-mono text-cyan-700 font-extrabold text-[11px]">
-                  {dispatchedSalesRate}% تم إخراجه
-                </span>
-              </div>
-              <div className="mt-2 grid grid-cols-2 gap-2 text-center">
-                <div className="bg-cyan-50/70 p-1.5 rounded-lg border border-cyan-200/60">
-                  <div className="text-[10px] text-cyan-800 font-bold">تم إخراجه / محصل</div>
-                  <div className="text-sm font-black font-mono text-cyan-900">${dispatchedSales.toLocaleString()}</div>
-                </div>
-                <div className="bg-amber-50/70 p-1.5 rounded-lg border border-amber-200/60">
-                  <div className="text-[10px] text-amber-800 font-bold">متبقي في الساحة</div>
-                  <div className="text-sm font-black font-mono text-amber-950">${remainingInYardSales.toLocaleString()}</div>
-                </div>
-              </div>
-            </div>
-            {/* Dual visual progress bar */}
-            <div className="w-full bg-amber-100 rounded-full h-2 mt-2.5 overflow-hidden flex shadow-inner">
-              <div 
-                className="bg-cyan-600 h-full transition-all duration-500" 
-                style={{ width: `${dispatchedSalesRate}%` }} 
-                title={`المبالغ المخرجة: ${dispatchedSalesRate}%`}
-              />
-              <div 
-                className="bg-amber-500 h-full transition-all duration-500" 
-                style={{ width: `${100 - dispatchedSalesRate}%` }} 
-                title={`المبالغ المتبقية بالساحة: ${100 - dispatchedSalesRate}%`}
-              />
-            </div>
-          </div>
-
-          {/* Card 3: مؤشر سلامة ومطابقة الطرود (السليمة مقابل الفروقات) */}
-          <div className="bg-white rounded-xl p-3.5 border border-slate-200 shadow-xs flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between text-slate-600 text-[11px] font-bold">
-                <span className="flex items-center gap-1">
-                  <Percent className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>مؤشر مطابقة وسلامة الطرود</span>
-                </span>
-                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold font-mono ${
-                  mismatchItemsCount > 0 ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
-                }`}>
-                  {mismatchItemsCount > 0 ? `${mismatchItemsCount} فروقات` : 'مطابقة تامة'}
-                </span>
-              </div>
-              <div className="mt-2 flex items-baseline justify-between">
-                <div>
-                  <span className="text-xl font-black font-mono text-emerald-700">{healthyPercentage}%</span>
-                  <span className="text-[10px] text-slate-500 mr-1.5">طرود سليمة ومطابقة</span>
-                </div>
-                <div className="text-left">
-                  <span className="text-sm font-bold font-mono text-rose-600">{mismatchPercentage}%</span>
-                  <span className="text-[10px] text-slate-400 mr-1">فروقات</span>
-                </div>
-              </div>
-            </div>
-            {/* Visual ratio bar */}
-            <div className="w-full bg-slate-100 rounded-full h-2 mt-2.5 overflow-hidden flex shadow-inner">
-              <div 
-                className="bg-emerald-500 h-full transition-all duration-500" 
-                style={{ width: `${healthyPercentage}%` }} 
-                title={`طرود مطابقة: ${healthyPercentage}%`}
-              />
-              <div 
-                className="bg-rose-500 h-full transition-all duration-500" 
-                style={{ width: `${mismatchPercentage}%` }} 
-                title={`طرود بها فروقات: ${mismatchPercentage}%`}
-              />
-              <div 
-                className="bg-amber-400 h-full transition-all duration-500" 
-                style={{ width: `${Math.max(0, 100 - healthyPercentage - mismatchPercentage)}%` }} 
-                title="قيد التدقيق"
-              />
-            </div>
-          </div>
-
-          {/* Card 4: ديون وبضائع معلقة (> 5 أيام) */}
-          <div className="bg-white rounded-xl p-3.5 border border-slate-200 shadow-xs flex flex-col justify-between">
-            <div className="flex items-center justify-between text-slate-600 text-[11px] font-bold">
-              <span className="flex items-center gap-1 text-amber-900">
-                <CalendarClock className="w-3.5 h-3.5 text-amber-600" />
-                <span>شحنات متأخرة بالساحة (&gt; 5 أيام)</span>
-              </span>
-              <span className="text-[10px] font-mono font-bold bg-amber-100 text-amber-900 px-2 py-0.5 rounded-full">
-                {overdueItemsCount} طرد
-              </span>
-            </div>
-            <div className="mt-2 flex items-center justify-between">
-              <div>
-                <div className="text-lg font-black text-amber-900 font-mono">
-                  {overdueItemsCount} <span className="text-xs font-sans text-slate-600">بند يحتاج إخراج</span>
-                </div>
-                <div className="text-[10px] text-slate-500">تحتاج متابعة وتواصل مع العميل لتفادي الرسوم</div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setFilterStatus('overdue')}
-                className="px-2.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold text-[11px] transition-all cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap"
-              >
-                عرض المتأخرة
-              </button>
-            </div>
-            <div className="mt-2 pt-1.5 border-t border-slate-100 text-[10px] text-slate-500 flex justify-between">
-              <span>الطرود المحصورة: <b className="text-slate-800 font-mono font-bold">{totalActualPackages}</b></span>
-              <span>الطرود المقيدة: <b className="text-slate-800 font-mono font-bold">{totalExpectedPackages}</b></span>
-            </div>
-          </div>
-        </div>
-
-        {/* Freight Type Selection, Searchable Shipment Combobox, Global Date Picker & Search Bar */}
-        <div className="mt-4 p-3 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white rounded-xl shadow-xs border border-slate-700">
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5 items-end">
-            
-            {/* 1. Freight Type Selector (Directive #2) */}
-            <div className="md:col-span-3">
-              <label className="block text-xs font-bold text-amber-300 mb-1.5">
-                اختر نوع الشحن (بحري أو جوي):
-              </label>
-              <div className="grid grid-cols-3 gap-1.5 p-1 bg-slate-950/60 rounded-xl border border-slate-700/80">
-                <button
-                  type="button"
-                  onClick={() => setFreightType('all')}
-                  className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer ${
-                    freightType === 'all'
-                      ? 'bg-amber-500 text-slate-950 shadow-xs font-extrabold'
-                      : 'text-slate-300 hover:text-white hover:bg-slate-800'
-                  }`}
-                >
-                  <span>الكل</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFreightType('sea')}
-                  className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer ${
-                    freightType === 'sea'
-                      ? 'bg-cyan-500 text-slate-950 shadow-xs font-extrabold'
-                      : 'text-slate-300 hover:text-white hover:bg-slate-800'
-                  }`}
-                  title="شحن بحري - حاويات RQ"
-                >
-                  <Ship className="w-3.5 h-3.5" />
-                  <span>بحري (RQ)</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFreightType('air')}
-                  className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer ${
-                    freightType === 'air'
-                      ? 'bg-sky-400 text-slate-950 shadow-xs font-extrabold'
-                      : 'text-slate-300 hover:text-white hover:bg-slate-800'
-                  }`}
-                  title="شحن جوي - طيران RA"
-                >
-                  <Plane className="w-3.5 h-3.5" />
-                  <span>جوي (RA)</span>
-                </button>
-              </div>
-            </div>
-
-            {/* 2. Searchable Shipment Combobox (Directives #3 & #12) */}
-            <div className="md:col-span-3 relative">
-              <label className="block text-xs font-bold text-amber-300 mb-1.5">
-                رقم الشحنة المراد جردها (بحث وقائمة منسدلة):
-              </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  placeholder="اكتب رقم الشحنة أو اختر من القائمة..."
-                  value={shipmentSearchTerm !== '' ? shipmentSearchTerm : (selectedShipment === 'الكل' ? '' : selectedShipment)}
-                  onChange={(e) => {
-                    setShipmentSearchTerm(e.target.value);
-                    setIsShipmentDropdownOpen(true);
-                  }}
-                  onFocus={() => setIsShipmentDropdownOpen(true)}
-                  className="w-full pl-8 pr-3 py-2 text-xs bg-slate-950 border border-slate-600 hover:border-amber-400 focus:border-amber-400 rounded-lg text-white font-bold font-mono focus:ring-2 focus:ring-amber-500 shadow-inner"
-                />
-                <button
-                  type="button"
-                  onClick={() => setIsShipmentDropdownOpen(prev => !prev)}
-                  className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-amber-400 p-1 cursor-pointer"
-                  title="فتح قائمة أرقام الشحنات"
-                >
-                  <ChevronDown className={`w-4 h-4 transition-transform ${isShipmentDropdownOpen ? 'rotate-180' : ''}`} />
-                </button>
-              </div>
-
-              {/* Combobox Dropdown Results */}
-              {isShipmentDropdownOpen && (
-                <div 
-                  className="absolute z-30 right-0 left-0 mt-1 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl max-h-60 overflow-y-auto custom-scrollbar p-1.5 font-['Cairo'] text-xs"
-                  onMouseDown={(e) => e.preventDefault()}
-                >
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedShipment('الكل');
-                      setShipmentSearchTerm('');
-                      setIsShipmentDropdownOpen(false);
-                    }}
-                    className={`w-full text-right px-3 py-2 rounded-lg font-bold transition-colors flex items-center justify-between cursor-pointer ${
-                      selectedShipment === 'الكل' ? 'bg-amber-500 text-slate-950' : 'text-slate-200 hover:bg-slate-800'
-                    }`}
-                  >
-                    <span>كافة الشحنات</span>
-                    <span className="font-mono text-[11px] opacity-80">{shipments.length} بند</span>
-                  </button>
-
-                  {availableShipments
-                    .filter(s => {
-                      if (!shipmentSearchTerm) return true;
-                      return s.toLowerCase().includes(shipmentSearchTerm.toLowerCase());
-                    })
-                    .map(s => {
-                      const count = shipments.filter(item => item.shipment === s).length;
-                      const isSea = s.toUpperCase().startsWith('RQ');
-                      const isAir = s.toUpperCase().startsWith('RA');
-                      return (
-                        <button
-                          key={s}
-                          type="button"
-                          onClick={() => {
-                            setSelectedShipment(s);
-                            setShipmentSearchTerm('');
-                            setIsShipmentDropdownOpen(false);
-                          }}
-                          className={`w-full text-right px-3 py-2 rounded-lg font-bold transition-colors flex items-center justify-between cursor-pointer ${
-                            selectedShipment === s ? 'bg-amber-500 text-slate-950' : 'text-slate-200 hover:bg-slate-800'
-                          }`}
-                        >
-                          <div className="flex items-center gap-1.5 font-mono">
-                            {isSea && <span className="text-cyan-400 text-xs">🚢</span>}
-                            {isAir && <span className="text-sky-300 text-xs">✈️</span>}
-                            <span>{s}</span>
-                          </div>
-                          <span className="text-[11px] px-1.5 py-0.5 rounded bg-slate-800 font-mono text-slate-300">
-                            {count} بند
-                          </span>
-                        </button>
-                      );
-                    })}
-                </div>
-              )}
-            </div>
-
-            {/* 3. Global Date Picker: تثبيت تاريخ دخول موحد للشحنة */}
-            <div className="md:col-span-3">
-              <div className="flex items-center justify-between gap-1 mb-1.5">
-                <label className="block text-xs font-bold text-amber-300 truncate">
-                  رزنامة عامة (تاريخ دخول للشحنة):
-                </label>
-                {selectedShipment !== 'الكل' ? (
-                  <span className="text-[10px] text-amber-400 font-mono font-bold bg-amber-400/20 px-1.5 py-0.5 rounded whitespace-nowrap">
-                    [{selectedShipment}]
-                  </span>
-                ) : (
-                  <span className="text-[10px] text-slate-400 font-mono">
-                    (لكافة البنود)
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center gap-1.5">
-                <input
-                  type="date"
-                  value={batchEntryDate}
-                  onChange={(e) => setBatchEntryDate(e.target.value)}
-                  className="w-full px-2.5 py-2 text-xs bg-slate-950 border border-slate-600 hover:border-amber-400 focus:border-amber-400 rounded-lg text-white font-mono font-bold text-center focus:ring-2 focus:ring-amber-500 shadow-inner cursor-pointer"
-                  title="اختر تاريخ الدخول لتطبيقه على كافة بنود الشحنة المحددة"
-                />
-                <button
-                  type="button"
-                  onClick={() => handleApplyBatchEntryDate(batchEntryDate)}
-                  className="inline-flex items-center justify-center gap-1 px-3 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs whitespace-nowrap shadow-xs cursor-pointer transition-all active:scale-95"
-                  title="تطبيق وتثبيت هذا التاريخ على كافة بنود الشحنة وتحديث عدادات البقاء تلقائياً"
-                >
-                  <Calendar className="w-3.5 h-3.5" />
-                  <span>تثبيت للشحنة</span>
-                </button>
-              </div>
-              <div className="flex items-center justify-between text-[10px] text-slate-300 mt-1 px-0.5">
-                <span>
-                  المدة المحسوبة: <b className="text-amber-400 font-mono font-bold">{calculateDaysInYard(batchEntryDate)} {calculateDaysInYard(batchEntryDate) === 1 ? 'يوم' : 'أيام'}</b>
-                </span>
-                {calculateDaysInYard(batchEntryDate) > 5 && (
-                  <span className="text-amber-300 font-bold">⚠️ &gt; 5 أيام</span>
-                )}
-              </div>
-            </div>
-
-            {/* 4. Fast Text Search (Retains in localStorage, Directive #12) */}
-            <div className="md:col-span-3 relative">
-              <label className="block text-xs font-bold text-amber-300 mb-1.5">
-                بحث سريع بالاسم، الكود، المحافظة، الكفيل أو العنوان:
-              </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  placeholder="ابحث بالاسم، الكود، المحافظة، العنوان، الكفيل..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-8 pr-8 py-2 text-xs bg-slate-950 border border-slate-600 rounded-lg text-white font-medium focus:ring-2 focus:ring-amber-500 shadow-inner"
-                />
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                {searchQuery && (
-                  <button
-                    type="button"
-                    onClick={() => setSearchQuery('')}
-                    className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-0.5"
-                    title="مسح البحث"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                )}
-              </div>
-            </div>
-
-          </div>
-
-          {/* Advanced Filtering Controls (Guarantor / Auditor & Financial Status) */}
-          <div className="pt-3 mt-3 border-t border-slate-700/80 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-12 gap-3 items-center text-xs">
-            {/* Filter by Guarantor / Responsible Employee */}
-            <div className="md:col-span-4 flex items-center gap-2">
-              <label className="text-slate-300 font-bold whitespace-nowrap flex items-center gap-1">
-                <UserCheck className="w-3.5 h-3.5 text-amber-400" />
-                <span>فلترة الكفيل / المدقق:</span>
-              </label>
-              <select
-                value={selectedGuarantor}
-                onChange={(e) => setSelectedGuarantor(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-600 rounded-lg px-2.5 py-1.5 text-white font-medium focus:ring-1 focus:ring-amber-500 cursor-pointer"
-              >
-                <option value="الكل">كافة الكفلاء والمسؤولين ({availableGuarantors.length})</option>
-                {availableGuarantors.map(g => (
-                  <option key={g} value={g}>{g}</option>
-                ))}
-              </select>
-            </div>
-
-            {/* Filter by Financial Status */}
-            <div className="md:col-span-5 flex items-center gap-2">
-              <label className="text-slate-300 font-bold whitespace-nowrap flex items-center gap-1">
-                <DollarSign className="w-3.5 h-3.5 text-emerald-400" />
-                <span>الحالة المالية ($):</span>
-              </label>
-              <div className="grid grid-cols-4 gap-1 w-full bg-slate-950/70 p-1 rounded-lg border border-slate-700">
-                <button
-                  type="button"
-                  onClick={() => setFinancialFilter('all')}
-                  className={`py-1 px-1 rounded text-center font-bold text-[11px] transition-all cursor-pointer ${
-                    financialFilter === 'all'
-                      ? 'bg-amber-500 text-slate-950 shadow-xs'
-                      : 'text-slate-300 hover:text-white'
-                  }`}
-                >
-                  الكل
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFinancialFilter('with_debt')}
-                  className={`py-1 px-1 rounded text-center font-bold text-[11px] transition-all cursor-pointer ${
-                    financialFilter === 'with_debt'
-                      ? 'bg-rose-600 text-white shadow-xs'
-                      : 'text-rose-300 hover:text-white'
-                  }`}
-                  title="عرض فقط البنود التي عليها مبالغ وديون مستحقة"
-                >
-                  عليها ديون
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFinancialFilter('high_debt')}
-                  className={`py-1 px-1 rounded text-center font-bold text-[11px] transition-all cursor-pointer ${
-                    financialFilter === 'high_debt'
-                      ? 'bg-amber-600 text-white shadow-xs'
-                      : 'text-amber-300 hover:text-white'
-                  }`}
-                  title="عرض البنود ذات الديون المرتفعة $500 فأكثر"
-                >
-                  &ge; $500
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFinancialFilter('zero_debt')}
-                  className={`py-1 px-1 rounded text-center font-bold text-[11px] transition-all cursor-pointer ${
-                    financialFilter === 'zero_debt'
-                      ? 'bg-emerald-600 text-white shadow-xs'
-                      : 'text-emerald-300 hover:text-white'
-                  }`}
-                  title="عرض البنود الخالصة تماماً من الديون ($0)"
-                >
-                  خالصة ($0)
-                </button>
-              </div>
-            </div>
-
-            {/* Reset Advanced Filters if active */}
-            <div className="md:col-span-3 flex justify-end">
-              {(selectedGuarantor !== 'الكل' || financialFilter !== 'all') && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedGuarantor('الكل');
-                    setFinancialFilter('all');
-                  }}
-                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 font-bold text-xs cursor-pointer transition-colors"
-                >
-                  <X className="w-3.5 h-3.5" />
-                  <span>إلغاء تصفية الكفيل والمالية</span>
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* 7 Reordered Filter Buttons: EXACT SEQUENCE REQUESTED BY USER (Directive #1)
-            1. كافة البنود
-            2. قيد الانتظار لم تُجرد
-            3. تم الجرد والتدقيق
-            4. يوجد فرق في الطرود
-            5. تجاوزت ٥ أيام
-            6. تم إخراجها من الساحة
-            7. متواجدة بالساحة
-        */}
-        <div className="flex flex-wrap items-center justify-between gap-3 mt-4 pt-3 border-t border-slate-100">
-          <div className="flex items-center gap-1.5 overflow-x-auto py-1">
-            
-            {/* 1. كافة البنود */}
-            <button
-              onClick={() => setFilterStatus('all')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                filterStatus === 'all'
-                  ? 'bg-slate-800 text-white shadow-xs font-extrabold'
-                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-              }`}
-            >
-              <span>1. كافة البنود</span>
-              <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
-                filterStatus === 'all' ? 'bg-slate-700 text-amber-300' : 'bg-slate-200 text-slate-700'
-              }`}>
-                {totalItemsCount}
-              </span>
-            </button>
-
-            {/* 2. قيد الانتظار لم تُجرد */}
-            <button
-              onClick={() => setFilterStatus('pending')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                filterStatus === 'pending'
-                  ? 'bg-amber-600 text-white shadow-xs font-extrabold ring-2 ring-amber-400'
-                  : 'bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-200'
-              }`}
-            >
-              <Clock className="w-3.5 h-3.5" />
-              <span>2. قيد الانتظار لم تُجرد</span>
-              <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
-                filterStatus === 'pending' ? 'bg-amber-700 text-white' : 'bg-amber-200 text-amber-900'
-              }`}>
-                {pendingItemsCount}
-              </span>
-            </button>
-
-            {/* 3. تم الجرد والتدقيق */}
-            <button
-              onClick={() => setFilterStatus('audited')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                filterStatus === 'audited'
-                  ? 'bg-emerald-700 text-white shadow-xs font-extrabold'
-                  : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200'
-              }`}
-            >
-              <CheckCircle2 className="w-3.5 h-3.5" />
-              <span>3. تم الجرد والتدقيق</span>
-              <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
-                filterStatus === 'audited' ? 'bg-emerald-800 text-white' : 'bg-emerald-200 text-emerald-900'
-              }`}>
-                {auditedItemsCount}
-              </span>
-            </button>
-
-            {/* 4. يوجد فرق في الطرود */}
-            <button
-              onClick={() => setFilterStatus('mismatch')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                filterStatus === 'mismatch'
-                  ? 'bg-rose-700 text-white shadow-xs font-extrabold'
-                  : 'bg-rose-50 text-rose-800 hover:bg-rose-100 border border-rose-200'
-              }`}
-            >
-              <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
-              <span>4. يوجد فرق في الطرود</span>
-              <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
-                filterStatus === 'mismatch' ? 'bg-rose-800 text-white' : 'bg-rose-200 text-rose-900'
-              }`}>
-                {mismatchItemsCount}
-              </span>
-            </button>
-
-            {/* 5. تجاوزت ٥ أيام */}
-            <button
-              onClick={() => setFilterStatus('overdue')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                filterStatus === 'overdue'
-                  ? 'bg-amber-600 text-white shadow-xs font-extrabold ring-2 ring-amber-400'
-                  : 'bg-amber-100/90 text-amber-900 hover:bg-amber-200 border border-amber-300'
-              }`}
-              title="شحنات تجاوزت مدة وجودها في الساحة 5 أيام وتحتاج معالجة عاجلة"
-            >
-              <CalendarClock className="w-3.5 h-3.5 text-amber-800" />
-              <span>5. تجاوزت ٥ أيام</span>
-              <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
-                filterStatus === 'overdue' ? 'bg-amber-800 text-white' : 'bg-amber-300 text-amber-950'
-              }`}>
-                {overdueItemsCount}
-              </span>
-            </button>
-
-            {/* 6. تم إخراجها من الساحة */}
-            <button
-              onClick={() => setFilterStatus('dispatched')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                filterStatus === 'dispatched'
-                  ? 'bg-cyan-700 text-white shadow-xs font-extrabold'
-                  : 'bg-cyan-50 text-cyan-900 hover:bg-cyan-100 border border-cyan-300'
-              }`}
-              title="بضائع تم وضع إشارة إخراجها من الساحة"
-            >
-              <Truck className="w-3.5 h-3.5 text-cyan-700" />
-              <span>6. تم إخراجها من الساحة</span>
-              <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
-                filterStatus === 'dispatched' ? 'bg-cyan-900 text-white' : 'bg-cyan-200 text-cyan-950'
-              }`}>
-                {dispatchedItemsCount}
-              </span>
-            </button>
-
-            {/* 7. متواجدة بالساحة */}
-            <button
-              onClick={() => setFilterStatus('in_yard')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                filterStatus === 'in_yard'
-                  ? 'bg-slate-700 text-white shadow-xs font-extrabold'
-                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-300'
-              }`}
-              title="بضائع ما زالت متواجدة في الساحة"
-            >
-              <Warehouse className="w-3.5 h-3.5 text-slate-600" />
-              <span>7. متواجدة بالساحة</span>
-              <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
-                filterStatus === 'in_yard' ? 'bg-slate-800 text-white' : 'bg-slate-200 text-slate-800'
-              }`}>
-                {inYardItemsCount}
-              </span>
-            </button>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleMarkAllVisibleMatching}
-              className="flex items-center gap-1.5 text-xs text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer shadow-2xs active:scale-95"
-              title="اعتماد عدد الطرود المقيدة كجرد فعلي لكافة البنود الظاهرة حالياً"
-            >
-              <CheckCheck className="w-3.5 h-3.5 text-emerald-600" />
-              <span>مطابقة كافة المعروض</span>
-            </button>
-          </div>
-        </div>
       </div>
 
       {/* Main Yard Table */}
@@ -2786,11 +1937,6 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
             <span className="text-xs bg-slate-700/80 text-amber-400 px-2 py-0.5 rounded font-mono font-bold">
               المعروض: {filteredItems.length} عميل
             </span>
-            {filterStatus !== 'all' && (
-              <span className="text-[11px] bg-amber-400/20 text-amber-300 border border-amber-400/30 px-2 py-0.5 rounded-full font-bold">
-                فلتر مفعّل: {filterStatus === 'audited' ? 'المجرودة' : filterStatus === 'pending' ? 'قيد الانتظار' : 'فروقات'}
-              </span>
-            )}
           </div>
 
           <div className="flex items-center gap-2 text-xs">
@@ -2798,6 +1944,77 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
               💾 يتم حفظ التعديلات في المتصفح تلقائياً عند إدخال أي رقم أو ملاحظة
             </span>
           </div>
+        </div>
+
+        {/* Smart Search & Filters Toolbar */}
+        <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center gap-3">
+          <div className="relative flex-1 min-w-[220px]">
+            <Search className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="بحث شامل: الاسم، العنوان، الملاحظات، الكود..."
+              className="w-full pr-9 pl-8 py-2 text-xs border border-slate-300 rounded-lg bg-white focus:border-amber-500 focus:ring-2 focus:ring-amber-500 font-medium text-slate-800"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                title="مسح البحث"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <Layers className="w-4 h-4 text-slate-500" />
+            <select
+              value={shipmentFilter}
+              onChange={(e) => setShipmentFilter(e.target.value)}
+              className="py-2 px-3 text-xs border border-slate-300 rounded-lg bg-white focus:border-amber-500 focus:ring-2 focus:ring-amber-500 font-bold text-slate-800 cursor-pointer"
+              title="تصفية حسب رقم الشحنة"
+            >
+              <option value="الكل">كل الشحنات</option>
+              {availableShipmentCodes.map(code => (
+                <option key={code} value={code}>{code}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <Filter className="w-4 h-4 text-slate-500" />
+            <input
+              type="text"
+              value={codeFilter}
+              onChange={(e) => setCodeFilter(e.target.value)}
+              placeholder="فلتر كود العميل..."
+              className="w-40 py-2 px-3 text-xs border border-slate-300 rounded-lg bg-white focus:border-amber-500 focus:ring-2 focus:ring-amber-500 font-mono font-medium text-slate-800"
+              title="تصفية حسب كود العميل"
+            />
+          </div>
+
+          {(searchQuery || shipmentFilter !== 'الكل' || codeFilter) && (
+            <button
+              type="button"
+              onClick={() => {
+                setSearchQuery('');
+                setShipmentFilter('الكل');
+                setCodeFilter('');
+              }}
+              className="inline-flex items-center gap-1 px-3 py-2 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-all"
+              title="إعادة تعيين جميع الفلاتر"
+            >
+              <X className="w-3.5 h-3.5" />
+              مسح الفلاتر
+            </button>
+          )}
+
+          <span className="text-[11px] font-bold text-slate-600 bg-white border border-slate-200 rounded-lg px-2.5 py-2 whitespace-nowrap">
+            النتائج: <span className="font-mono text-slate-900">{filteredItems.length}</span>
+          </span>
         </div>
 
         <div className="overflow-x-auto custom-scrollbar max-h-[550px]">
@@ -2816,7 +2033,11 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                 </th>
                 <th className="py-3 px-2 text-center w-10">#</th>
                 <th className="py-3 px-3 text-center w-14">تدقيق</th>
-                <th className="py-3 px-3 text-center w-40">إشارة إخراج الساحة</th>
+                <th className="py-3 px-3 text-center w-24 bg-slate-700/60 text-amber-300">إجمالي الطرود المقيدة</th>
+                <th className="py-3 px-3 text-center w-24 bg-slate-700/60 text-amber-300">إجمالي المخرجات</th>
+                <th className="py-3 px-3 text-center w-32 bg-slate-700/60 text-amber-300">المتبقي في الساحة</th>
+                <th className="py-3 px-3 text-center w-28 bg-slate-700/60 text-amber-300">الإخراج الجديد</th>
+                <th className="py-3 px-3 text-center w-24 bg-slate-700/60 text-amber-300">تنفيذ الإخراج</th>
                 <th className="py-3 px-2 text-center w-14 bg-slate-750" title="سجل تدقيق وتعديلات البند ومراسلة العميل">
                   <span className="inline-flex items-center justify-center gap-1 text-[11px] font-bold text-amber-300">
                     <History className="w-3 h-3 text-amber-400" />
@@ -2824,6 +2045,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                   </span>
                 </th>
                 <th className="py-3 px-3 w-24">الكود</th>
+                <th className="py-3 px-3 text-center w-24 bg-slate-700/60 text-amber-300">رقم الشحنة</th>
                 <th className="py-3 px-3 text-center w-28 bg-slate-700/60 text-amber-300">المبلغ / الديون ($)</th>
                 <th className="py-3 px-3 w-32 bg-slate-700/60 text-amber-300">الكفيل</th>
                 <th className="py-3 px-3 min-w-[140px]">اسم العميل</th>
@@ -2831,17 +2053,16 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                 <th className="py-3 px-3 text-center w-24">الطرود المقيدة</th>
                 <th className="py-3 px-3 text-center min-w-[170px]">تاريخ الدخول وعداد البقاء بالساحة</th>
                 <th className="py-3 px-3 text-center w-48">الجرد الفعلي في الساحة</th>
-                <th className="py-3 px-3 text-center w-28">حالة المطابقة</th>
                 <th className="py-3 px-3 text-center min-w-[320px]">ملاحظات الساحة والأوسمة</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
               {filteredItems.length === 0 ? (
                 <tr>
-                  <td colSpan={15} className="py-12 text-center text-slate-400">
-                    <div className="max-w-xs mx-auto text-center">
-                      <p className="text-sm font-bold text-slate-600 mb-1">لا توجد بنود مطابقة للفلتر المحدد</p>
-                      <p className="text-xs text-slate-400">يرجى تعديل الفلتر أو اختيار "كافة البنود" للمراجعة</p>
+                  <td colSpan={19} className="py-16 text-center text-slate-400">
+                    <div className="max-w-md mx-auto text-center">
+                      <Package className="w-10 h-10 mx-auto text-slate-300 mb-3" />
+                      <p className="text-sm font-bold text-slate-600">الجدول فارغ، بانتظار ترحيل البضائع من الجرد</p>
                     </div>
                   </td>
                 </tr>
@@ -2857,6 +2078,8 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                   const isOverdue = daysInYard > 5;
                   const isDispatched = !!dispatchedItems[item.id]?.dispatched;
                   const dispatchedInfo = dispatchedItems[item.id];
+                  const dispatchedQty = getDispatchedQty(item);
+                  const remainingQty = getRemainingQty(item);
                   const recentMod = recentlyModifiedItems[item.id];
                   const isRecentlyModified = !!recentMod;
 
@@ -2904,13 +2127,8 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                           onClick={() => {
                             const newChecked = !isChecked;
                             setCheckedItems(prev => ({ ...prev, [item.id]: newChecked }));
-                            let newActual = actual;
-                            if (!hasActual && newChecked) {
-                              newActual = item.packages;
-                              setActualCounts(prev => ({ ...prev, [item.id]: item.packages }));
-                            }
                             const actionText = newChecked ? 'تأكيد تدقيق البند ومطابقته' : 'إلغاء تدقيق البند';
-                            syncItemUpdate(item, actionText, { checked: newChecked, actualCount: newActual });
+                            syncItemUpdate(item, actionText, { checked: newChecked });
                           }}
                           className={`w-6 h-6 rounded-md border flex items-center justify-center transition-all cursor-pointer ${
                             isChecked
@@ -2923,34 +2141,66 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                         </button>
                       </td>
 
-                      {/* Out of yard dispatch toggle button with Date and Clock (Directive #10) */}
-                      <td className="py-3 px-3 text-center">
-                        {isDispatched ? (
-                          <div className="flex flex-col items-center gap-1">
-                            <button
-                              type="button"
-                              onClick={() => toggleDispatched(item)}
-                              className="inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] shadow-xs cursor-pointer transition-all active:scale-95 whitespace-nowrap"
-                              title="تم وضع إشارة الإخراج - اضغط للإلغاء"
-                            >
-                              <Truck className="w-3.5 h-3.5" />
-                              <span>تم الإخراج</span>
-                            </button>
-                            <div className="flex flex-col items-center text-[10px] text-emerald-900 font-mono font-bold leading-tight">
-                              <span>📅 {dispatchedInfo?.date || todayStr}</span>
-                              <span>⏰ {dispatchedInfo?.time}</span>
-                            </div>
-                          </div>
-                        ) : (
+                      {/* Partial dispatch: totals, remaining balance, new dispatch input & execute button */}
+                      <td className="py-3 px-3 text-center font-bold text-slate-800 font-mono bg-slate-50/40">
+                        {item.packages}
+                      </td>
+
+                      <td className="py-3 px-3 text-center font-bold font-mono bg-slate-50/40">
+                        <span className={dispatchedQty > 0 ? 'text-cyan-700' : 'text-slate-400'}>{dispatchedQty}</span>
+                      </td>
+
+                      <td className="py-3 px-3 text-center bg-slate-50/40">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <span className={`font-black font-mono ${remainingQty === 0 ? 'text-emerald-700' : 'text-amber-800'}`}>
+                            {remainingQty}
+                          </span>
                           <button
                             type="button"
-                            onClick={() => toggleDispatched(item)}
-                            className="inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-amber-100 text-slate-700 hover:text-amber-950 border border-slate-300 hover:border-amber-400 font-bold text-[11px] cursor-pointer transition-all active:scale-95 whitespace-nowrap"
-                            title="وضع إشارة إخراج بضاعة الساحة لهذا العميل"
+                            onClick={() => setMovementHistoryItem(item)}
+                            className="inline-flex items-center justify-center p-1 rounded-lg bg-white hover:bg-amber-50 text-amber-900 border border-amber-200 hover:border-amber-400 transition-colors cursor-pointer shadow-2xs"
+                            title="عرض سجل حركات إخراج الطرود لهذا العميل"
                           >
-                            <Truck className="w-3.5 h-3.5 text-slate-400" />
-                            <span>إشارة إخراج</span>
+                            <History className="w-3.5 h-3.5 text-amber-700" />
                           </button>
+                        </div>
+                      </td>
+
+                      <td className="py-3 px-3 text-center">
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={newDispatchInputs[item.id] || ''}
+                          onChange={(e) => {
+                            const digits = e.target.value.replace(/[^\d]/g, '');
+                            setNewDispatchInputs(prev => ({ ...prev, [item.id]: digits }));
+                          }}
+                          disabled={remainingQty === 0}
+                          placeholder="0"
+                          className="w-20 px-2 py-1.5 text-center font-bold font-mono text-xs bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
+                          title={remainingQty === 0 ? 'تم إخراج كامل الطرود المجرودة' : 'أدخل عدد الطرود المراد إخراجها الآن'}
+                        />
+                      </td>
+
+                      <td className="py-3 px-3 text-center">
+                        <button
+                          type="button"
+                          onClick={() => handlePartialDispatch(item)}
+                          disabled={remainingQty === 0}
+                          className="inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[11px] shadow-xs cursor-pointer transition-all active:scale-95 whitespace-nowrap disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed"
+                          title={
+                            remainingQty === 0
+                              ? 'تم إخراج كامل الطرود المجرودة'
+                              : 'تنفيذ إخراج الكمية المدخلة'
+                          }
+                        >
+                          <Truck className="w-3.5 h-3.5" />
+                          <span>إخراج</span>
+                        </button>
+                        {isDispatched && (
+                          <div className="mt-1 text-[9px] text-emerald-800 font-mono font-bold leading-tight">
+                            {dispatchedInfo?.fullDateTime}
+                          </div>
                         )}
                       </td>
 
@@ -2971,10 +2221,21 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                         {item.code}
                       </td>
 
+                      {/* Shipment Number */}
+                      <td className="py-3 px-3 text-center bg-amber-50/20">
+                        {item.shipment ? (
+                          <span className="inline-block px-2 py-0.5 rounded-md bg-slate-800 text-amber-300 font-mono font-bold text-[11px] whitespace-nowrap">
+                            {item.shipment}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 text-xs">—</span>
+                        )}
+                      </td>
+
                       {/* Amount / Debt ($) Column (Directive #4) */}
                       <td className="py-3 px-3 font-mono font-extrabold text-center whitespace-nowrap bg-amber-50/20">
                         <span className="text-emerald-700 font-mono text-xs font-black">
-                          ${Number(item.sales || 0).toLocaleString()}
+                          ${Number(item.sales || 0).toLocaleString('en-US')}
                         </span>
                       </td>
 
@@ -3022,23 +2283,18 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                         📦 {item.packages}
                       </td>
 
-                      {/* Live Date Picker & Accurate Days in Yard Counter (Directive #8) */}
+                      {/* Entry date (plain text, migrated/read-only) & Accurate Days in Yard Counter */}
                       <td className="py-3 px-3 text-center">
-                        <div className="flex flex-col items-center gap-1.5 min-w-[150px]">
-                          <div className="relative w-full">
-                            <input
-                              type="date"
-                              value={itemEntryDate}
-                              onChange={(e) => {
-                                const newDate = e.target.value;
-                                setEntryDates(prev => ({ ...prev, [item.id]: newDate }));
-                                syncItemUpdate(item, `تعديل تاريخ دخول البضاعة إلى ${newDate}`, { entryDate: newDate });
-                              }}
-                              className="w-full px-2 py-1 text-xs border border-slate-300 hover:border-amber-500 focus:border-amber-500 rounded-lg text-slate-900 font-mono font-bold bg-white text-center focus:ring-1 focus:ring-amber-500 cursor-pointer shadow-2xs"
-                              title="تعديل وتحديد تاريخ دخول البضاعة للساحة"
-                            />
-                          </div>
-                          
+                        <div className="flex flex-col items-center gap-1.5 min-w-[130px]">
+                          <span
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-200 text-slate-800 font-mono font-bold text-xs shadow-2xs"
+                            dir="ltr"
+                            title="تاريخ دخول البضاعة للساحة (ثابت ومُرحّل من الجرد)"
+                          >
+                            <Calendar className="w-3.5 h-3.5 text-slate-500" />
+                            <span>{formatEntryDate(itemEntryDate)}</span>
+                          </span>
+
                           {/* Live computed days in yard badge */}
                           {isDispatched ? (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200 whitespace-nowrap">
@@ -3057,61 +2313,24 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                         </div>
                       </td>
 
-                      {/* Actual Input with Quick Matching Button */}
+                      {/* Actual tally (read-only): the number is migrated from واجهة جرد المستودعات */}
                       <td className="py-3 px-3 text-center">
                         <div className="flex items-center justify-center gap-1.5">
-                          <input
-                            type="number"
-                            min="0"
-                            placeholder={String(item.packages)}
-                            value={hasActual ? actual : ''}
-                            onChange={(e) => {
-                              const val = e.target.value === '' ? '' : Number(e.target.value);
-                              setActualCounts(prev => ({ ...prev, [item.id]: val }));
-                              const newChecked = isChecked || val !== '';
-                              if (!isChecked && val !== '') {
-                                setCheckedItems(prev => ({ ...prev, [item.id]: true }));
-                              }
-                              syncItemUpdate(item, `تعديل الجرد الفعلي إلى ${val} طرد`, { actualCount: val, checked: newChecked });
-                            }}
-                            className={`w-20 px-2 py-1 text-center font-mono font-bold text-xs border rounded-lg focus:ring-2 focus:ring-amber-500 transition-all ${
-                              hasMismatch
-                                ? 'border-rose-400 bg-rose-50 text-rose-800 ring-1 ring-rose-300'
-                                : hasActual
-                                ? 'border-emerald-300 bg-emerald-50/50 text-emerald-900'
-                                : 'border-slate-300 bg-white'
-                            }`}
-                          />
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setActualCounts(prev => ({ ...prev, [item.id]: item.packages }));
-                              setCheckedItems(prev => ({ ...prev, [item.id]: true }));
-                              syncItemUpdate(item, `مطابقة الجرد الفعلي (${item.packages} طرد)`, { actualCount: item.packages, checked: true });
-                            }}
-                            className="px-1.5 py-1 text-[10px] bg-slate-100 hover:bg-emerald-100 hover:text-emerald-800 text-slate-600 border border-slate-200 rounded font-bold transition-all cursor-pointer whitespace-nowrap"
-                            title="ضبط الجرد الفعلي مطابقاً للطرود المقيدة"
-                          >
-                            مطابق
-                          </button>
+                           <input
+                             type="text"
+                             dir="ltr"
+                             readOnly
+                             disabled
+                             aria-readonly="true"
+                             tabIndex={-1}
+                             value={hasActual ? toLatinDigits(String(actual)) : ''}
+                             placeholder="0"
+                             className={`w-20 px-2 py-1 text-center font-mono font-bold text-xs border rounded-lg bg-gray-100 text-gray-600 cursor-not-allowed ${
+                               hasMismatch ? 'border-rose-300' : 'border-slate-300'
+                             }`}
+                             title="حقل مقفل للقراءة فقط — يتم ترحيل الرقم من واجهة جرد المستودعات"
+                           />
                         </div>
-                      </td>
-
-                      {/* Match Status Badge */}
-                      <td className="py-3 px-3 text-center">
-                        {hasMismatch ? (
-                          <span className="text-[10px] font-bold text-rose-700 bg-rose-100 px-2 py-0.5 rounded-full border border-rose-200 whitespace-nowrap">
-                            فرق ({Number(actual) - item.packages > 0 ? `+${Number(actual) - item.packages}` : Number(actual) - item.packages})
-                          </span>
-                        ) : isChecked ? (
-                          <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full border border-emerald-200 whitespace-nowrap">
-                            مطابق ومفحوص
-                          </span>
-                        ) : (
-                          <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200 whitespace-nowrap">
-                            بانتظار الجرد
-                          </span>
-                        )}
                       </td>
 
                       {/* Notes Column with quick tags and generous space */}
@@ -3216,16 +2435,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              {/* Batch Action 1: اعتماد التدقيق والمطابقة دفعة واحدة */}
-              <button
-                type="button"
-                onClick={handleBatchApproveAudit}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-xs transition-all active:scale-95 cursor-pointer"
-                title="اعتماد تدقيق ومطابقة كافة البنود المحددة دفعة واحدة"
-              >
-                <CheckCheck className="w-4 h-4" />
-                <span>اعتماد التدقيق للمحدد ({selectedCount})</span>
-              </button>
+              {/* Batch Action 1 removed: الجرد الفعلي is read-only here and comes from جرد المستودعات */}
 
               {/* Batch Action 2: تسجيل إخراج الساحة دفعة واحدة */}
               <button
@@ -3238,16 +2448,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                 <span>تسجيل إخراج الساحة ({selectedCount})</span>
               </button>
 
-              {/* Batch Action 3: تطبيق تاريخ الدخول المختار على المحدد فقط */}
-              <button
-                type="button"
-                onClick={() => handleBatchApplyDateToSelected(batchEntryDate)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-xs transition-all active:scale-95 cursor-pointer"
-                title={`تطبيق تاريخ ${batchEntryDate} على البنود المحددة وتحديث عداداتها`}
-              >
-                <Calendar className="w-4 h-4" />
-                <span>تثبيت التاريخ ({batchEntryDate})</span>
-              </button>
+              {/* Batch Action 3 removed: entry dates are fixed and read-only in this view */}
 
               {/* Clear Selection */}
               <button
@@ -3319,39 +2520,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
         </div>
       )}
 
-      {/* 5. Modal: Confirm Reset Draft */}
-      {resetConfirmOpen && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/65 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden p-6 text-right font-['Cairo']">
-            <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-700 flex items-center justify-center mx-auto mb-4 border border-rose-200">
-              <AlertTriangle className="w-7 h-7" />
-            </div>
-
-            <h3 className="text-base font-extrabold text-slate-900 text-center mb-1">
-              تأكيد إعادة ضبط مسودة الجرد
-            </h3>
-            
-            <p className="text-xs text-slate-600 text-center leading-relaxed mb-5">
-              هل أنت متأكد من رغبتك في تفريغ كافة الأرقام الفعلية وعلامات التدقيق المسجلة لشحنة <b className="text-slate-900">[{selectedShipment}]</b>؟ لا يمكن التراجع عن هذه الخطوة.
-            </p>
-
-            <div className="flex items-center gap-2.5">
-              <button
-                onClick={handleConfirmReset}
-                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-md transition-all cursor-pointer"
-              >
-                نعم، تفريغ المسودة
-              </button>
-              <button
-                onClick={() => setResetConfirmOpen(false)}
-                className="flex-1 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs border border-slate-300 transition-all cursor-pointer"
-              >
-                إلغاء
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 5. Modal: Confirm Reset Draft — removed (tally is read-only in this view) */}
 
       {/* 6. Modal: Team Activity & Real-Time Alerts Drawer */}
       {showAlertsDrawer && (
@@ -3436,14 +2605,6 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                 <span className="text-xs text-slate-500">
                   إجمالي التنبيهات: <b>{teamAlerts.length}</b>
                 </span>
-                <button
-                  onClick={handleSimulateRemoteUpdate}
-                  disabled={isSimulating}
-                  className="px-2.5 py-1 text-[10px] bg-amber-100 hover:bg-amber-200 text-amber-900 font-bold rounded-lg cursor-pointer transition-colors"
-                  title="محاكاة تعديل فوري لاختبار التنبيه"
-                >
-                  🧪 تجربة تنبيه فوري
-                </button>
               </div>
               <div className="flex items-center gap-2">
                 {teamAlerts.length > 0 && (
@@ -3508,7 +2669,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
               <div>
                 <span className="text-slate-500 block text-[10px]">المبلغ / الديون ($):</span>
                 <b className="text-emerald-700 font-mono text-sm">
-                  ${(activeMessageClient.totalSales || activeMessageClient.sales || 0).toLocaleString()}
+                  ${(activeMessageClient.totalSales || activeMessageClient.sales || 0).toLocaleString('en-US')}
                 </b>
               </div>
             </div>
@@ -3775,6 +2936,91 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
         </div>
       )}
 
+      {/* 12. Modal: Partial Dispatch Movement History (سجل حركات إخراج الطرود للعميل) */}
+      {movementHistoryItem && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/65 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden p-6 text-right font-['Cairo'] animate-fade-in">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+              <div className="flex items-center gap-2">
+                <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center">
+                  <History className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-900">سجل حركات إخراج الطرود</h3>
+                  <p className="text-xs text-slate-500">
+                    العميل: <b className="text-slate-800">{movementHistoryItem.name}</b>
+                    <span className="mx-1.5 text-slate-300">|</span>
+                    الكود: <b className="font-mono text-amber-700">{movementHistoryItem.code}</b>
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMovementHistoryItem(null)}
+                className="text-slate-400 hover:text-slate-600 p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2 mb-4 text-center text-xs">
+              <div className="bg-slate-50 rounded-xl p-2 border border-slate-200">
+                <div className="text-[10px] text-slate-500 font-bold">الطرود المقيدة</div>
+                <div className="font-black font-mono text-slate-800">{movementHistoryItem.packages}</div>
+              </div>
+              <div className="bg-cyan-50 rounded-xl p-2 border border-cyan-200">
+                <div className="text-[10px] text-cyan-800 font-bold">إجمالي المخرجات</div>
+                <div className="font-black font-mono text-cyan-900">{getDispatchedQty(movementHistoryItem)}</div>
+              </div>
+              <div className="bg-amber-50 rounded-xl p-2 border border-amber-200">
+                <div className="text-[10px] text-amber-800 font-bold">المتبقي في الساحة</div>
+                <div className="font-black font-mono text-amber-950">{getRemainingQty(movementHistoryItem)}</div>
+              </div>
+            </div>
+
+            <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
+              {(dispatchMovements[movementHistoryItem.id] || []).length === 0 ? (
+                <div className="text-center py-8 text-slate-400 text-xs">
+                  لا توجد حركات إخراج مسجلة لهذا العميل حتى الآن.
+                </div>
+              ) : (
+                [...(dispatchMovements[movementHistoryItem.id] || [])].reverse().map(mv => (
+                  <div key={mv.id} className="p-3 rounded-xl bg-slate-50 hover:bg-slate-100/80 border border-slate-200 text-xs flex items-center justify-between gap-3 transition-colors">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-900 flex items-center justify-center font-black font-mono">
+                        {mv.quantity}
+                      </div>
+                      <div>
+                        <div className="font-bold text-slate-800">تم إخراج {mv.quantity} طرد</div>
+                        <div className="text-[11px] text-slate-500 mt-0.5">
+                          المسؤول: <b className="text-indigo-900">{mv.user || '—'}</b>
+                        </div>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-mono text-slate-500 bg-white px-2 py-1 rounded border border-slate-200 whitespace-nowrap">
+                      {mv.fullDateTime}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="mt-5 pt-3 border-t border-slate-100 flex items-center justify-between">
+              <span className="text-xs text-slate-500">
+                إجمالي الحركات: <b className="font-mono text-slate-900">{(dispatchMovements[movementHistoryItem.id] || []).length}</b>
+              </span>
+              <button
+                type="button"
+                onClick={() => setMovementHistoryItem(null)}
+                className="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold cursor-pointer"
+              >
+                إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 11. Modal: Inventory & Accounting Report Options (تصدير تقرير الجرد والتدقيق المحاسبي) */}
       {showExportModal && (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/65 backdrop-blur-xs flex items-center justify-center p-4">
@@ -3799,11 +3045,11 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
               </div>
               <div className="flex justify-between items-center text-slate-600">
                 <span>إجمالي المبالغ المستحقة ($):</span>
-                <b className="font-mono text-emerald-700">${totalFilteredSales.toLocaleString()}</b>
+                <b className="font-mono text-emerald-700">${totalFilteredSales.toLocaleString('en-US')}</b>
               </div>
               <div className="flex justify-between items-center text-slate-600">
                 <span>المحصل (المُخرج) مقابل المتبقي:</span>
-                <b className="font-mono text-cyan-800">${dispatchedSales.toLocaleString()} / ${remainingInYardSales.toLocaleString()}</b>
+                <b className="font-mono text-cyan-800">${dispatchedSales.toLocaleString('en-US')} / ${remainingInYardSales.toLocaleString('en-US')}</b>
               </div>
               <div className="flex justify-between items-center text-slate-600">
                 <span>البنود التي بها فروقات:</span>
