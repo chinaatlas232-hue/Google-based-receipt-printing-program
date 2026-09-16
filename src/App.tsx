@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { RefreshCw, CheckCircle2, AlertCircle, X, SlidersHorizontal, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { ShipmentRecord, FilterState, CitySummary, ActivePage } from './types';
 import { initialShipments } from './data/initialData';
@@ -39,7 +39,20 @@ export default function App() {
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [isDriveSyncing, setIsDriveSyncing] = useState(false);
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
+  const [lastChangeTime, setLastChangeTime] = useState<string | null>(null);
+  const [syncOutcome, setSyncOutcome] = useState<'changed' | 'unchanged' | 'throttled' | 'error' | 'idle'>('idle');
+  const [syncDelta, setSyncDelta] = useState<{ added: number; modified: number; removed: number }>({
+    added: 0,
+    modified: 0,
+    removed: 0,
+  });
   const [syncBanner, setSyncBanner] = useState<{ type: 'loading' | 'success' | 'error'; message: string } | null>(null);
+
+  // Guards against overlapping sync requests (poll timer + focus event + button
+  // can all fire close together). A sync already in flight is simply reused.
+  const syncInFlightRef = useRef(false);
+  // Whether we have ever adopted server data; the first successful load always wins.
+  const dataLoadedRef = useRef(false);
 
   // Sidebar Visibility State (Full Width Expansion)
   const [isSidebarVisible, setIsSidebarVisible] = useState<boolean>(() => {
@@ -63,36 +76,49 @@ export default function App() {
     });
   };
 
-  // Fetch real merged data from server backend on mount and auto-sync periodically
-  useEffect(() => {
-    async function loadBackendData(force = false) {
+  // Fetch real merged data from server backend on mount and auto-sync periodically.
+  // Only replaces local state when the server reports the data actually changed,
+  // so unchanged polls cost nothing and never cause a re-render.
+  const loadBackendData = useMemo(() => {
+    return async (force = false) => {
+      if (syncInFlightRef.current) return;
+      syncInFlightRef.current = true;
       try {
         const url = force ? '/api/data?force=true' : '/api/data';
         const res = await fetch(url);
         if (res.ok) {
           const json = await res.json();
-          if (json.success && Array.isArray(json.shipments) && json.shipments.length > 0) {
+          if (json.lastSync) setLastSyncTime(json.lastSync);
+          if (json.lastChange) setLastChangeTime(json.lastChange);
+          if (json.outcome) setSyncOutcome(json.outcome);
+          if (json.delta) setSyncDelta(json.delta);
+
+          const shouldAdopt = force || json.changed === true || !dataLoadedRef.current;
+          if (json.success && Array.isArray(json.shipments) && json.shipments.length > 0 && shouldAdopt) {
             setShipments(json.shipments);
-            if (json.lastSync) {
-              setLastSyncTime(json.lastSync);
-            }
-            console.log(`[Google Sheets Sync] Loaded ${json.shipments.length} records. Last sync: ${json.lastSync}`);
+            dataLoadedRef.current = true;
+            console.log(`[Smart Sync] Adopted ${json.shipments.length} records (changed=${!!json.changed}). Last sync: ${json.lastSync}`);
           }
         }
       } catch (err) {
         console.warn('Could not load /api/data:', err);
+      } finally {
+        syncInFlightRef.current = false;
       }
-    }
+    };
+  }, []);
 
-    // Initial live fetch from Google Sheets
+  useEffect(() => {
+    // Initial fetch: check for changes immediately.
     loadBackendData(true);
 
-    // Periodic auto-sync every 30 seconds
+    // Periodic poll. This is cheap: the server only downloads when the remote
+    // spreadsheet changed, and the client only re-renders when data changed.
     const interval = setInterval(() => {
       loadBackendData(false);
     }, 30 * 1000);
 
-    // Auto-sync when window gains focus
+    // Check on tab focus (server-side throttle collapses bursts).
     const handleWindowFocus = () => {
       loadBackendData(false);
     };
@@ -102,25 +128,37 @@ export default function App() {
       clearInterval(interval);
       window.removeEventListener('focus', handleWindowFocus);
     };
-  }, []);
+  }, [loadBackendData]);
 
   const handleDirectDriveSync = async () => {
     setIsDriveSyncing(true);
     setSyncBanner({
       type: 'loading',
-      message: 'جارٍ سحب وتحديث أحدث بيانات الشحنات والعملاء مباشرة من Google Sheets...'
+      message: 'جارٍ التحقق من التغييرات الجديدة في Google Sheets...'
     });
     try {
       const res = await fetch('/api/sync-drive', { method: 'POST' });
       const data = await res.json();
       if (data.success && Array.isArray(data.shipments)) {
-        setShipments(data.shipments);
-        if (data.lastSync) {
-          setLastSyncTime(data.lastSync);
+        // The server tells us whether anything actually changed, so an
+        // unchanged sync leaves the current records untouched.
+        if (data.changed || !dataLoadedRef.current) {
+          setShipments(data.shipments);
+          dataLoadedRef.current = true;
         }
+        if (data.lastSync) setLastSyncTime(data.lastSync);
+        if (data.lastChange) setLastChangeTime(data.lastChange);
+        if (data.outcome) setSyncOutcome(data.outcome);
+        if (data.delta) setSyncDelta(data.delta);
+
+        const { added = 0, modified = 0, removed = 0 } = data.delta || {};
+        const hasDelta = added > 0 || modified > 0 || removed > 0;
+
         setSyncBanner({
           type: 'success',
-          message: `تم بنجاح تحديث وتزامن ${data.count.toLocaleString('en-US')} شحنة مباشرة مع Google Sheets وتحديث كافة الحسابات والأسعار!`
+          message: hasDelta
+            ? `تمت المزامنة الذكية: ${added} جديد، ${modified} معدّل${removed ? `، ${removed} محذوف` : ''} — الإجمالي ${data.count.toLocaleString('en-US')} سجل.`
+            : `تمت المزامنة الذكية — لا توجد تغييرات جديدة (${data.count.toLocaleString('en-US')} سجل محدّث).`
         });
         setTimeout(() => setSyncBanner(null), 7000);
       } else {
@@ -128,6 +166,7 @@ export default function App() {
       }
     } catch (err: any) {
       console.error(err);
+      setSyncOutcome('error');
       setSyncBanner({
         type: 'error',
         message: `تعذر التزامن مع Google Sheets: ${err.message || 'خطأ في الاتصال بالسيرفر'}`
@@ -372,6 +411,9 @@ export default function App() {
         onSyncDrive={handleDirectDriveSync}
         isSyncing={isDriveSyncing}
         lastSyncTime={lastSyncTime}
+        lastChangeTime={lastChangeTime}
+        syncOutcome={syncOutcome}
+        syncDelta={syncDelta}
       />
 
       {/* 2. Main Page Content (Full Width) */}

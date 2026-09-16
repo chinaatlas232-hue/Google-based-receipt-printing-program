@@ -1,8 +1,10 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
 import XLSX from 'xlsx';
+import { computeDelta, hasChanges } from './syncDelta';
 
 const app = express();
 const PORT = 3000;
@@ -65,36 +67,205 @@ function normalizePhone(rawPhone: unknown): string {
   return p;
 }
 
-// Download helper from Google Drive & Google Spreadsheets
-async function downloadDriveFile(fileId: string, destPath: string): Promise<boolean> {
+/**
+ * Cache validators for each remote file. They let us ask Google "has this
+ * changed since last time?" instead of blindly re-downloading the whole file.
+ */
+interface RemoteFileState {
+  etag: string | null;
+  lastModified: string | null;
+  contentHash: string | null;
+  bytes: number;
+  /** When we last fully verified this file (a real download + hash check). */
+  lastVerifiedAt: number;
+}
+
+const remoteFileState: Record<string, RemoteFileState> = {};
+
+function getRemoteState(fileId: string): RemoteFileState {
+  if (!remoteFileState[fileId]) {
+    remoteFileState[fileId] = {
+      etag: null,
+      lastModified: null,
+      contentHash: null,
+      bytes: 0,
+      lastVerifiedAt: 0,
+    };
+  }
+  return remoteFileState[fileId];
+}
+
+function hashBuffer(buf: Buffer): string {
+  return crypto.createHash('sha256').update(buf).digest('hex');
+}
+
+/**
+ * Even when the metadata probe says "unchanged", we still perform a real
+ * download at least this often. This bounds any risk of the remote metadata
+ * being stale and guarantees we can never drift from the spreadsheet.
+ */
+const PROBE_MAX_AGE_MS = 10 * 60 * 1000;
+
+type DownloadOutcome = 'downloaded' | 'not-modified' | 'failed';
+
+interface RemoteMetadata {
+  lastModified: string | null;
+  contentLength: number | null;
+}
+
+/**
+ * Cheap HEAD probe returning only the file's validators (no body). Google's
+ * spreadsheet export does not answer 304 to conditional GETs, so a metadata
+ * comparison is the only way to avoid transferring ~1 MB on every check.
+ */
+async function probeRemoteMetadata(fileId: string): Promise<RemoteMetadata | null> {
+  const url = `https://docs.google.com/uc?export=download&id=${fileId}&confirm=t`;
+  try {
+    const res = await fetch(url, { method: 'HEAD', redirect: 'follow' });
+    if (!res.ok) return null;
+    const len = Number(res.headers.get('content-length'));
+    return {
+      lastModified: res.headers.get('last-modified'),
+      contentLength: Number.isFinite(len) && len > 0 ? len : null,
+    };
+  } catch (err) {
+    console.warn(`Metadata probe failed for ${fileId}:`, err);
+    return null;
+  }
+}
+
+/**
+ * Smart download, in order of increasing cost:
+ *   1. Metadata probe (HEAD) - skip entirely when the remote file is unchanged.
+ *   2. Conditional GET (If-None-Match / If-Modified-Since) - honours 304.
+ *   3. Body hash comparison - catches servers that send no validators.
+ *
+ * @param allowProbe Set to false to force an authoritative download (manual sync).
+ */
+async function downloadDriveFile(
+  fileId: string,
+  destPath: string,
+  allowProbe = true
+): Promise<DownloadOutcome> {
+  const state = getRemoteState(fileId);
+
+  // 1. Metadata fast-path
+  if (allowProbe && state.lastModified && fs.existsSync(destPath) && state.lastVerifiedAt > 0) {
+    const probeAge = Date.now() - state.lastVerifiedAt;
+    if (probeAge < PROBE_MAX_AGE_MS) {
+      const meta = await probeRemoteMetadata(fileId);
+      const unchanged =
+        meta &&
+        meta.lastModified === state.lastModified &&
+        (meta.contentLength === null || meta.contentLength === state.bytes);
+
+      if (unchanged) {
+        console.log(`File ${fileId} unchanged per metadata probe, skipping download (~${state.bytes} bytes saved).`);
+        return 'not-modified';
+      }
+    } else {
+      console.log(`File ${fileId} metadata probe skipped (last full verification ${Math.round(probeAge / 60000)} min ago).`);
+    }
+  }
+
   const urls = [
     `https://docs.google.com/spreadsheets/d/${fileId}/export?format=xlsx`,
     `https://docs.google.com/uc?export=download&id=${fileId}&confirm=t`
   ];
 
+  let sawNotModified = false;
+
   for (const url of urls) {
+    // 2. Conditional GET
+    const headers: Record<string, string> = {};
+    if (state.etag) headers['If-None-Match'] = state.etag;
+    if (state.lastModified) headers['If-Modified-Since'] = state.lastModified;
+
     try {
-      const res = await fetch(url, { redirect: 'follow' });
+      const res = await fetch(url, { redirect: 'follow', headers });
+
+      if (res.status === 304) {
+        console.log(`File ${fileId} is unchanged (304 Not Modified), skipping download.`);
+        state.lastVerifiedAt = Date.now();
+        return 'not-modified';
+      }
+
       if (res.ok) {
         const arrayBuffer = await res.arrayBuffer();
-        if (arrayBuffer.byteLength > 1000) {
-          fs.writeFileSync(destPath, Buffer.from(arrayBuffer));
-          console.log(`Successfully downloaded file ${fileId} (${arrayBuffer.byteLength} bytes) from ${url}`);
-          return true;
+        if (arrayBuffer.byteLength <= 1000) {
+          console.warn(`Attempt from ${url} returned a suspiciously small body (${arrayBuffer.byteLength} bytes)`);
+          continue;
         }
+
+        const buf = Buffer.from(arrayBuffer);
+        const newHash = hashBuffer(buf);
+
+        // Keep the newest validators for the probe / conditional GET.
+        const headerLastModified = res.headers.get('last-modified');
+        if (headerLastModified) state.lastModified = headerLastModified;
+        state.etag = res.headers.get('etag') || state.etag;
+
+        // 3. Body hash comparison
+        if (state.contentHash && state.contentHash === newHash && fs.existsSync(destPath)) {
+          state.bytes = buf.byteLength;
+          state.lastVerifiedAt = Date.now();
+          console.log(`File ${fileId} body identical to cached copy (hash ${newHash.slice(0, 12)}), keeping existing file.`);
+          return 'not-modified';
+        }
+
+        fs.writeFileSync(destPath, buf);
+        state.contentHash = newHash;
+        state.bytes = buf.byteLength;
+        state.lastVerifiedAt = Date.now();
+
+        // The `export?format=xlsx` endpoint sends no validators, so grab the
+        // file's last-modified time from a HEAD request once. Without it the
+        // metadata probe can never short-circuit future downloads.
+        if (!state.lastModified) {
+          const meta = await probeRemoteMetadata(fileId);
+          if (meta?.lastModified) state.lastModified = meta.lastModified;
+          if (meta?.contentLength && meta.contentLength === buf.byteLength) {
+            state.bytes = meta.contentLength;
+          }
+        }
+
+        console.log(
+          `Successfully downloaded file ${fileId} (${buf.byteLength} bytes, hash ${newHash.slice(0, 12)}) from ${url}`
+        );
+        return 'downloaded';
       }
+
+      if (res.status === 304) sawNotModified = true;
       console.warn(`Attempt from ${url} returned status: ${res.status}`);
     } catch (err) {
       console.warn(`Error fetching file ${fileId} from ${url}:`, err);
     }
   }
-  return false;
+
+  return sawNotModified ? 'not-modified' : 'failed';
 }
 
 // Memory cache & Sync State
 let cachedShipments: any[] = [];
 let lastSyncTime: string | null = null;
 let isCurrentlySyncing = false;
+
+// Smart-sync bookkeeping
+export type SyncOutcome = 'changed' | 'unchanged' | 'throttled' | 'error' | 'idle';
+
+let lastSyncAttemptTime = 0;        // epoch ms of the last completed sync attempt
+let lastDataChangeTime: string | null = null; // ISO time the data actually changed
+let lastSyncOutcome: SyncOutcome = 'idle';
+let lastDelta: { added: number; modified: number; removed: number } = { added: 0, modified: 0, removed: 0 };
+let lastSyncError: string | null = null;
+
+/**
+ * Minimum gap between two network syncs triggered by background/automatic
+ * callers. Rapid successive triggers (tab focus, polling, overlapping timers)
+ * collapse into a single download. A manual user sync bypasses this.
+ */
+const SYNC_MIN_INTERVAL_MS = 15_000;
+const SYNC_INTERVAL_MS = 45_000;    // background refresh cadence
 
 function parseNumeric(val: any): number {
   if (val === undefined || val === null || val === '') return 0;
@@ -191,27 +362,119 @@ function loadAndMergeFromDisk(): any[] {
   }
 }
 
-async function syncDriveData(forceDownload = true): Promise<{ count: number; shipments: any[] }> {
+export interface SyncResult {
+  count: number;
+  shipments: any[];
+  changed: boolean;
+  throttled: boolean;
+  skippedDownload: boolean;
+  delta: { added: number; modified: number; removed: number };
+  lastSync: string | null;
+  lastChange: string | null;
+  outcome: SyncOutcome;
+}
+
+/**
+ * Smart sync.
+ *
+ * @param bypassThrottle Check right now even if a sync just happened.
+ * @param authoritative  Always download the files instead of trusting the
+ *                       metadata probe (used by the user's sync button and at
+ *                       startup, where a guaranteed-fresh read is expected).
+ */
+async function syncDriveData(bypassThrottle = false, authoritative = false): Promise<SyncResult> {
+  const result = (changed: boolean, throttled = false, skippedDownload = false): SyncResult => ({
+    count: cachedShipments.length,
+    shipments: cachedShipments,
+    changed,
+    throttled,
+    skippedDownload,
+    delta: lastDelta,
+    lastSync: lastSyncTime,
+    lastChange: lastDataChangeTime,
+    outcome: lastSyncOutcome,
+  });
+
+  // A sync is already in flight - it will publish its own result.
   if (isCurrentlySyncing) {
-    return { count: cachedShipments.length, shipments: cachedShipments };
+    return result(false);
+  }
+
+  // Debounce: collapse rapid automatic triggers into one network round-trip.
+  const sinceLastAttempt = Date.now() - lastSyncAttemptTime;
+  if (!bypassThrottle && lastSyncAttemptTime > 0 && sinceLastAttempt < SYNC_MIN_INTERVAL_MS) {
+    console.log(
+      `Smart sync throttled (${Math.round(sinceLastAttempt / 1000)}s since last attempt, minimum ${SYNC_MIN_INTERVAL_MS / 1000}s).`
+    );
+    lastSyncOutcome = 'throttled';
+    return result(false, true);
   }
 
   isCurrentlySyncing = true;
+  lastSyncAttemptTime = Date.now();
+
   try {
-    if (forceDownload || !fs.existsSync(shipmentPath)) {
-      console.log('Fetching fresh live data from Google Sheets...');
+    const mustDownload = !fs.existsSync(shipmentPath) || !fs.existsSync(customerInfoPath);
+
+    // An authoritative sync always performs a real download; automatic syncs
+    // may skip it entirely via the cheap metadata probe.
+    const allowProbe = !authoritative;
+
+    let skippedDownload = false;
+    if (mustDownload) {
+      console.log('Cache missing on disk, fetching fresh data from Google Sheets...');
       await Promise.all([
-        downloadDriveFile(SHIPMENT_FILE_ID, shipmentPath),
-        downloadDriveFile(CUSTOMER_INFO_FILE_ID, customerInfoPath),
+        downloadDriveFile(SHIPMENT_FILE_ID, shipmentPath, false),
+        downloadDriveFile(CUSTOMER_INFO_FILE_ID, customerInfoPath, false),
       ]);
+    } else {
+      const outcomes = await Promise.all([
+        downloadDriveFile(SHIPMENT_FILE_ID, shipmentPath, allowProbe),
+        downloadDriveFile(CUSTOMER_INFO_FILE_ID, customerInfoPath, allowProbe),
+      ]);
+      skippedDownload = outcomes.every(o => o === 'not-modified');
+      if (skippedDownload) {
+        console.log('No remote changes detected, skipping re-parse of the spreadsheets.');
+      }
     }
+
+    const previousSnapshot = cachedShipments;
+
+    if (skippedDownload && previousSnapshot.length > 0) {
+      // Nothing changed remotely and we already hold the data - avoid all the
+      // parsing work and every downstream re-render.
+      lastSyncTime = new Date().toISOString();
+      lastDelta = { added: 0, modified: 0, removed: 0 };
+      lastSyncOutcome = 'unchanged';
+      lastSyncError = null;
+      return result(false, false, true);
+    }
+
     const merged = loadAndMergeFromDisk();
+    const delta = computeDelta(previousSnapshot, merged);
+    const changed = hasChanges(delta);
+
+    lastDelta = delta;
+    lastSyncOutcome = changed ? 'changed' : 'unchanged';
+    lastSyncError = null;
     lastSyncTime = new Date().toISOString();
-    console.log(`Google Sheets synced successfully: ${merged.length} records. Last sync: ${lastSyncTime}`);
-    return { count: merged.length, shipments: merged };
-  } catch (err) {
+    if (changed) lastDataChangeTime = lastSyncTime;
+
+    if (changed) {
+      cachedShipments = merged;
+      console.log(
+        `Google Sheets sync: ${merged.length} records (added ${delta.added}, modified ${delta.modified}, removed ${delta.removed}) at ${lastSyncTime}`
+      );
+      return result(true);
+    }
+
+    console.log(`Google Sheets sync: no data changes (${merged.length} records verified) at ${lastSyncTime}`);
+    return result(false);
+  } catch (err: any) {
     console.error('Failed to sync Google Sheets:', err);
-    return { count: cachedShipments.length, shipments: cachedShipments };
+    lastSyncOutcome = 'error';
+    lastSyncError = err?.message || String(err);
+    return result(false);
   } finally {
     isCurrentlySyncing = false;
   }
@@ -220,15 +483,21 @@ async function syncDriveData(forceDownload = true): Promise<{ count: number; shi
 // 1. API: Get Current Shipments Data
 app.get('/api/data', async (req, res) => {
   try {
+    // `force=true` (initial load / explicit request) bypasses the debounce.
+    // Otherwise this is a throttled check: rapid calls collapse into one and
+    // an unchanged remote file costs nothing but a HEAD request.
     const force = req.query.force === 'true';
-    if (force || cachedShipments.length === 0) {
-      await syncDriveData(force);
-    }
+    const sync = await syncDriveData(force, false);
     res.json({
       success: true,
       count: cachedShipments.length,
       lastSync: lastSyncTime,
+      lastChange: lastDataChangeTime,
       isSyncing: isCurrentlySyncing,
+      changed: sync ? sync.changed : false,
+      throttled: sync ? sync.throttled : false,
+      delta: lastDelta,
+      outcome: lastSyncOutcome,
       shipments: cachedShipments,
     });
   } catch (err: any) {
@@ -240,12 +509,21 @@ app.get('/api/data', async (req, res) => {
 const handleSync = async (req: express.Request, res: express.Response) => {
   try {
     console.log('User requested manual Google Sheets live synchronization...');
-    const result = await syncDriveData(true);
+    const result = await syncDriveData(true, true); // manual => bypass throttle, always fetch
+    const { added, modified, removed } = result.delta;
+    const deltaText =
+      added || modified || removed
+        ? ` — جديد: ${added}، معدّل: ${modified}، محذوف: ${removed}`
+        : ' — لا توجد تغييرات جديدة';
     res.json({
       success: true,
-      message: `تم تحديث وسحب أحدث بيانات الشحنات من Google Sheets بنجاح! (${result.count.toLocaleString('ar-IQ')} سجل)`,
+      message: `تمت المزامنة الذكية مع Google Sheets بنجاح! (${result.count.toLocaleString('en-US')} سجل)${deltaText}`,
       count: result.count,
-      lastSync: lastSyncTime,
+      lastSync: result.lastSync,
+      lastChange: result.lastChange,
+      changed: result.changed,
+      delta: result.delta,
+      outcome: result.outcome,
       shipments: result.shipments,
     });
   } catch (err: any) {
@@ -258,13 +536,24 @@ app.post('/api/sync-drive', handleSync);
 app.post('/api/sync', handleSync);
 app.get('/api/sync', handleSync);
 
-// 3. API: Status check
-app.get('/api/sync-status', (req, res) => {
+// 3. API: Status check (lightweight, never triggers a download)
+app.get('/api/sync-status', (_req, res) => {
+  const sinceLastAttempt = lastSyncAttemptTime > 0 ? Date.now() - lastSyncAttemptTime : null;
+  const nextSyncIn = sinceLastAttempt === null
+    ? 0
+    : Math.max(0, Math.ceil((SYNC_MIN_INTERVAL_MS - sinceLastAttempt) / 1000));
+
   res.json({
     success: true,
     count: cachedShipments.length,
     lastSync: lastSyncTime,
+    lastChange: lastDataChangeTime,
     isSyncing: isCurrentlySyncing,
+    outcome: lastSyncOutcome,
+    delta: lastDelta,
+    error: lastSyncError,
+    nextSyncIn,
+    syncIntervalSeconds: Math.round(SYNC_INTERVAL_MS / 1000),
   });
 });
 
@@ -660,17 +949,18 @@ async function startServer() {
   loadAndMergeFromDisk();
   console.log(`Loaded ${cachedShipments.length} records into cache from disk.`);
 
-  // Immediately trigger fresh live sync from Google Sheets in the background
-  syncDriveData(true).catch(err => {
+  // Immediately trigger a real live sync from Google Sheets in the background
+  syncDriveData(true, true).catch(err => {
     console.warn('Initial Google Sheets background sync error:', err);
   });
 
-  // Automatically refresh and sync with Google Sheets every 45 seconds
+  // Background refresh. The smart-sync layer only downloads when the remote
+  // spreadsheets actually changed, so this is cheap even at a short cadence.
   setInterval(() => {
-    syncDriveData(true).catch(err => {
+    syncDriveData(false).catch(err => {
       console.warn('Periodic Google Sheets background sync error:', err);
     });
-  }, 45 * 1000);
+  }, SYNC_INTERVAL_MS);
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

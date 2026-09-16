@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Package, 
   FileCheck2, 
@@ -9,12 +9,13 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   RefreshCw,
-  CheckCircle2,
   Wallet,
   Warehouse
 } from 'lucide-react';
 import { ActivePage } from '../types';
 import { COMPANY_INFO } from '../data/initialData';
+
+type SyncOutcome = 'changed' | 'unchanged' | 'throttled' | 'error' | 'idle';
 
 interface HeaderProps {
   activePage: ActivePage;
@@ -24,7 +25,36 @@ interface HeaderProps {
   onSyncDrive?: () => void;
   isSyncing?: boolean;
   lastSyncTime?: string | null;
+  lastChangeTime?: string | null;
+  syncOutcome?: SyncOutcome;
+  syncDelta?: { added: number; modified: number; removed: number };
 }
+
+/**
+ * Arabic relative-time label: "قبل X ثانية / دقيقة / ساعة / يوم".
+ * Kept dependency-free so it works without pulling in a date library.
+ */
+const formatRelativeTime = (iso: string | null | undefined, nowMs: number): string | null => {
+  if (!iso) return null;
+  const then = new Date(iso).getTime();
+  if (isNaN(then)) return null;
+
+  const seconds = Math.max(0, Math.floor((nowMs - then) / 1000));
+  if (seconds < 10) return 'الآن';
+  if (seconds < 60) return `قبل ${seconds} ثانية`;
+
+  const minutes = Math.floor(seconds / 60);
+  if (minutes === 1) return 'قبل دقيقة';
+  if (minutes < 60) return `قبل ${minutes} دقيقة`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours === 1) return 'قبل ساعة';
+  if (hours < 24) return `قبل ${hours} ساعة`;
+
+  const days = Math.floor(hours / 24);
+  if (days === 1) return 'قبل يوم';
+  return `قبل ${days} أيام`;
+};
 
 export const Header: React.FC<HeaderProps> = ({
   activePage,
@@ -34,6 +64,9 @@ export const Header: React.FC<HeaderProps> = ({
   onSyncDrive,
   isSyncing = false,
   lastSyncTime,
+  lastChangeTime,
+  syncOutcome,
+  syncDelta,
 }) => {
   const today = new Date().toLocaleDateString('ar-IQ-u-nu-latn', {
     weekday: 'long',
@@ -42,11 +75,30 @@ export const Header: React.FC<HeaderProps> = ({
     day: 'numeric'
   });
 
+  // Re-render every 20s so the "قبل X دقيقة" label stays truthful.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 20_000);
+    return () => clearInterval(timer);
+  }, []);
+
   const formattedSyncTime = lastSyncTime ? new Date(lastSyncTime).toLocaleTimeString('ar-IQ-u-nu-latn', {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit'
   }) : null;
+
+  const relativeSync = formatRelativeTime(lastSyncTime, nowMs);
+
+  const syncState = isSyncing
+    ? { text: 'جارٍ المزامنة...', tone: 'text-amber-300', dot: 'bg-amber-400' }
+    : syncOutcome === 'error'
+    ? { text: 'تعذرت المزامنة', tone: 'text-rose-300', dot: 'bg-rose-500' }
+    : relativeSync
+    ? { text: relativeSync, tone: 'text-emerald-400', dot: 'bg-emerald-500' }
+    : { text: 'بانتظار المزامنة', tone: 'text-slate-400', dot: 'bg-slate-500' };
+
+  const deltaTotal = syncDelta ? syncDelta.added + syncDelta.modified + syncDelta.removed : 0;
 
   return (
     <header className="no-print bg-gradient-to-r from-slate-800 via-slate-800/95 to-slate-750 text-white shadow-lg border-b border-slate-700/50 sticky top-0 z-30">
@@ -108,17 +160,20 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
 
               <div className="hidden sm:flex flex-col text-right px-2 py-0.5 border-r border-slate-700/60 text-[11px]">
-                <div className="flex items-center gap-1 text-emerald-400 font-bold">
-                  <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                  <span>Google Sheets متصل</span>
+                <div className="flex items-center gap-1 font-bold text-emerald-400">
+                  <span className={`w-1.5 h-1.5 rounded-full ${syncState.dot} ${isSyncing ? 'animate-pulse' : ''}`}></span>
+                  <span className="text-emerald-400">Google Sheets متصل</span>
                 </div>
-                {formattedSyncTime ? (
-                  <span className="text-[10px] text-slate-400 font-medium">
-                    آخر تحديث: {formattedSyncTime}
-                  </span>
-                ) : (
-                  <span className="text-[10px] text-slate-400 font-medium">
-                    تزامن تلقائي كل دقيقة
+
+                <span className={`text-[10px] font-medium ${syncState.tone}`}>
+                  {syncState.text}
+                  {formattedSyncTime ? ` — ${formattedSyncTime}` : ''}
+                </span>
+
+                {deltaTotal > 0 && !isSyncing && (
+                  <span className="text-[9px] text-slate-400 font-medium">
+                    آخر تغيير: {syncDelta!.added} جديد، {syncDelta!.modified} معدّل
+                    {syncDelta!.removed > 0 ? `، ${syncDelta!.removed} محذوف` : ''}
                   </span>
                 )}
               </div>
