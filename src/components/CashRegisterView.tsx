@@ -1,7 +1,40 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Plane, Ship, X, Save } from 'lucide-react';
+import { Plane, Ship, X, Save, ChevronDown, ChevronUp, Banknote, ArrowLeftRight, RefreshCw, Landmark, FileSpreadsheet, FileText, Pencil } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { CashSafeType, CashTransaction } from '../types';
 import { toLatinDigits } from './YardInventoryView';
+
+let amiriFontBase64: string | null = null;
+
+function hasArabic(value: string): boolean {
+  return /[\u0600-\u06FF]/.test(value);
+}
+
+function reshapeArabic(convertArabic: (value: string) => string, value: string): string {
+  const text = String(value ?? '');
+  if (!text) return text;
+  const reshaped = convertArabic(text);
+  if (!hasArabic(text)) return text;
+  return reshaped
+    .split(' ')
+    .map((word) => (hasArabic(word) ? word.split('').reverse().join('') : word))
+    .reverse()
+    .join(' ');
+}
+
+async function loadAmiriFontBase64(): Promise<string> {
+  if (amiriFontBase64) return amiriFontBase64;
+  const res = await fetch('/fonts/Amiri-Regular.ttf');
+  if (!res.ok) throw new Error('تعذر تحميل الخط العربي');
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  amiriFontBase64 = btoa(binary);
+  return amiriFontBase64;
+}
 
 interface CashRegisterViewProps {
   userName: string;
@@ -14,6 +47,13 @@ const STORAGE_KEY = CASH_REGISTER_STORAGE_KEY;
 const COLLECTIONS_STORAGE_KEY = 'atlas_debt_collections_v2';
 const INVENTORY_STORAGE_KEY = 'atlas_cash_inventory_v1';
 const IQD_DENOMS = [50000, 25000, 10000, 5000, 1000] as const;
+const IQD_ROW_COLORS: Record<number, string> = {
+  50000: '#fff1f2',
+  25000: '#f0fdf4',
+  10000: '#f0f9ff',
+  5000: '#fefce8',
+  1000: '#f8fafc',
+};
 
 type SafeTab = CashSafeType;
 
@@ -31,6 +71,7 @@ interface SafeInventory {
   counts: Record<number, number>;
   paidOut: number;
   otherUsd: number;
+  exchangeRate: number;
   details: FinanceDetail[];
 }
 
@@ -44,6 +85,7 @@ function emptyInventory(): SafeInventory {
     counts: { 50000: 0, 25000: 0, 10000: 0, 5000: 0, 1000: 0 },
     paidOut: 0,
     otherUsd: 0,
+    exchangeRate: 0,
     details: [],
   };
 }
@@ -208,6 +250,8 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
   const [activeTab, setActiveTab] = useState<SafeTab>('air');
   const [inventory, setInventory] = useState<InventoryState>(loadInventory);
   const [draftDetail, setDraftDetail] = useState<FinanceDetail>(emptyDetail);
+  const [financeCardOpen, setFinanceCardOpen] = useState(false);
+  const [editingDetailId, setEditingDetailId] = useState<string | null>(null);
 
   const refreshTransactions = () => setTransactions(loadTransactions());
 
@@ -248,6 +292,11 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
   const current = inventory[activeTab];
   const iqdTotal = IQD_DENOMS.reduce((sum, denom) => sum + denom * (Number(current.counts[denom]) || 0), 0);
   const remaining = totals[activeTab] - (Number(current.paidOut) || 0);
+  const otherUsd = Number(current.otherUsd) || 0;
+  const exchangeRate = Number(current.exchangeRate) || 0;
+  const usdDifference = remaining - otherUsd;
+  const iraqiSafe = usdDifference * exchangeRate;
+  const tallyDifference = iqdTotal - iraqiSafe;
   const isAir = activeTab === 'air';
 
   const updateCurrent = (patch: Partial<SafeInventory>) => {
@@ -263,7 +312,10 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
     updateCurrent({ counts: { ...current.counts, [denom]: count } });
   };
 
-  const resetDraft = () => setDraftDetail(emptyDetail());
+  const resetDraft = () => {
+    setDraftDetail(emptyDetail());
+    setEditingDetailId(null);
+  };
 
   const handleDraftChange = (field: keyof FinanceDetail, value: string) => {
     setDraftDetail((prev) => ({ ...prev, [field]: value }));
@@ -279,30 +331,122 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
     reader.readAsDataURL(file);
   };
 
+  const parseUsdAmount = (value: string): number => {
+    const numeric = Number(toLatinDigits(value).replace(/[^\d.]/g, ''));
+    return Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
+  };
+
   const handleSaveDraft = () => {
     if (!canEdit) return;
     const amount = toLatinDigits(draftDetail.amount).trim();
     const recipient = draftDetail.recipient.trim();
     const formNo = draftDetail.formNo.trim();
     if (!amount && !recipient && !formNo && !draftDetail.evidence && !draftDetail.payDate) return;
-    updateCurrent({
-      details: [
-        {
-          ...draftDetail,
-          id: `fin_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-          amount,
-          recipient,
-          formNo,
-        },
-        ...current.details,
-      ],
-    });
+    const spent = parseUsdAmount(amount);
+    const nextRow: FinanceDetail = {
+      ...draftDetail,
+      id: editingDetailId || `fin_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      amount,
+      recipient,
+      formNo,
+    };
+
+    if (editingDetailId) {
+      const previous = current.details.find((item) => item.id === editingDetailId);
+      const previousSpent = parseUsdAmount(previous?.amount || '');
+      updateCurrent({
+        paidOut: Math.max(0, (Number(current.paidOut) || 0) - previousSpent + spent),
+        details: current.details.map((item) => (item.id === editingDetailId ? nextRow : item)),
+      });
+    } else {
+      updateCurrent({
+        paidOut: (Number(current.paidOut) || 0) + spent,
+        details: [nextRow, ...current.details],
+      });
+    }
     resetDraft();
+    setFinanceCardOpen(false);
+  };
+
+  const handleEditDetail = (row: FinanceDetail) => {
+    if (!canEdit) return;
+    setEditingDetailId(row.id);
+    setDraftDetail({ ...row });
+    setFinanceCardOpen(true);
   };
 
   const handleRemoveDetail = (id: string) => {
     if (!canEdit) return;
-    updateCurrent({ details: current.details.filter((row) => row.id !== id) });
+    const row = current.details.find((item) => item.id === id);
+    const spent = parseUsdAmount(row?.amount || '');
+    if (editingDetailId === id) resetDraft();
+    updateCurrent({
+      paidOut: Math.max(0, (Number(current.paidOut) || 0) - spent),
+      details: current.details.filter((item) => item.id !== id),
+    });
+  };
+
+  const financeExportRows = current.details.map((row, index) => [
+    String(index + 1),
+    row.amount || '-',
+    row.recipient || '-',
+    row.formNo || '-',
+    row.evidenceName || (row.evidence ? 'مرفق' : '-'),
+    row.payDate || '-',
+  ]);
+
+  const exportFinanceExcel = () => {
+    const sheet = XLSX.utils.aoa_to_sheet([
+      ['تسلسل', 'المبلغ', 'اسم المستلم', 'رقم الفورم', 'الدليل', 'تاريخ التسديد'],
+      ...financeExportRows,
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, sheet, 'التفاصيل المالية');
+    XLSX.writeFile(wb, `التفاصيل_المالية_${isAir ? 'جوي' : 'بحري'}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  };
+
+  const exportFinancePdf = async () => {
+    const [{ jsPDF }, autoTableMod, reshaperMod] = await Promise.all([
+      import('jspdf'),
+      import('jspdf-autotable'),
+      import('arabic-reshaper'),
+    ]);
+    const autoTable = autoTableMod.default;
+    const convertArabic =
+      (reshaperMod as { default?: { convertArabic?: (v: string) => string }; convertArabic?: (v: string) => string }).default?.convertArabic
+      || (reshaperMod as { convertArabic?: (v: string) => string }).convertArabic
+      || ((v: string) => v);
+    const toRtlPdfText = (value: string) => reshapeArabic(convertArabic, value);
+    const fontBase64 = await loadAmiriFontBase64();
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    doc.addFileToVFS('Amiri-Regular.ttf', fontBase64);
+    doc.addFont('Amiri-Regular.ttf', 'Amiri', 'normal');
+    doc.setFont('Amiri', 'normal');
+    doc.setFontSize(14);
+    const title = toRtlPdfText(`التفاصيل المالية — ${isAir ? 'جوي' : 'بحري'}`);
+    doc.text(title, 283, 16, { align: 'right' });
+    const rtlHead = [
+      toRtlPdfText('تاريخ التسديد'),
+      toRtlPdfText('الدليل'),
+      toRtlPdfText('رقم الفورم'),
+      toRtlPdfText('اسم المستلم'),
+      toRtlPdfText('المبلغ'),
+      toRtlPdfText('تسلسل'),
+    ];
+    const rtlBody = financeExportRows.map((row) =>
+      [...row].reverse().map((cell) => toRtlPdfText(String(cell)))
+    );
+    autoTable(doc, {
+      startY: 22,
+      head: [rtlHead],
+      body: rtlBody,
+      styles: { font: 'Amiri', fontStyle: 'normal', fontSize: 10, halign: 'right', cellPadding: 2 },
+      headStyles: { font: 'Amiri', fontStyle: 'normal', fillColor: [30, 41, 59], textColor: 255, halign: 'right' },
+      columnStyles: {
+        5: { halign: 'center' },
+      },
+    });
+    doc.save(`التفاصيل_المالية_${isAir ? 'جوي' : 'بحري'}_${new Date().toISOString().slice(0, 10)}.pdf`);
   };
 
   return (
@@ -354,40 +498,78 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
         </div>
       </div>
 
-      <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3`}>
-        <div className={`bg-white dark:bg-[#1e1e1e] rounded-2xl border border-slate-200 dark:border-slate-700 p-4 border-t-4 ${isAir ? 'border-t-blue-600' : 'border-t-emerald-600'}`}>
-          <p className="text-[11px] font-bold text-slate-500 dark:text-slate-400">إجمالي القاصة</p>
-          <p className={`text-xl font-black mt-1 tabular-nums ${isAir ? 'text-blue-700' : 'text-emerald-700'}`}>{formatAmount(totals[activeTab])}</p>
+      <div className="space-y-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className={`bg-white dark:bg-[#1e1e1e] rounded-2xl border border-slate-200 dark:border-slate-700 p-4 border-t-4 ${isAir ? 'border-t-blue-600' : 'border-t-emerald-600'}`}>
+            <p className="text-[11px] font-bold text-slate-500 dark:text-slate-400">إجمالي القاصة</p>
+            <p className={`text-xl font-black mt-1 tabular-nums ${isAir ? 'text-blue-700' : 'text-emerald-700'}`}>{formatAmount(totals[activeTab])}</p>
+          </div>
+          <div className="bg-white dark:bg-[#1e1e1e] rounded-2xl border border-slate-200 dark:border-slate-700 p-4 border-t-4 border-t-rose-500">
+            <p className="text-[11px] font-bold text-slate-500 dark:text-slate-400">دفع من القاصة</p>
+            <input
+              value={current.paidOut || ''}
+              onChange={(e) => updateCurrent({ paidOut: Number(toLatinDigits(e.target.value).replace(/[^\d.]/g, '')) || 0 })}
+              disabled={!canEdit}
+              inputMode="decimal"
+              placeholder="0"
+              className="mt-1 w-full bg-transparent text-xl font-black text-rose-700 tabular-nums outline-none"
+            />
+          </div>
+          <div className="bg-white dark:bg-[#1e1e1e] rounded-2xl border border-slate-200 dark:border-slate-700 p-4 border-t-4 border-t-amber-500">
+            <p className="text-[11px] font-bold text-slate-500 dark:text-slate-400">متبقي رصيد</p>
+            <p className="text-xl font-black text-amber-700 mt-1 tabular-nums">{formatAmount(remaining)}</p>
+          </div>
         </div>
-        <div className="bg-white dark:bg-[#1e1e1e] rounded-2xl border border-slate-200 dark:border-slate-700 p-4 border-t-4 border-t-rose-500">
-          <p className="text-[11px] font-bold text-slate-500 dark:text-slate-400">دفع من القاصة</p>
-          <input
-            value={current.paidOut || ''}
-            onChange={(e) => updateCurrent({ paidOut: Number(toLatinDigits(e.target.value).replace(/[^\d.]/g, '')) || 0 })}
-            disabled={!canEdit}
-            inputMode="decimal"
-            placeholder="0"
-            className="mt-1 w-full bg-transparent text-xl font-black text-rose-700 tabular-nums outline-none"
-          />
-        </div>
-        <div className="bg-white dark:bg-[#1e1e1e] rounded-2xl border border-slate-200 dark:border-slate-700 p-4 border-t-4 border-t-amber-500">
-          <p className="text-[11px] font-bold text-slate-500 dark:text-slate-400">متبقي رصيد</p>
-          <p className="text-xl font-black text-amber-700 mt-1 tabular-nums">{formatAmount(remaining)}</p>
-        </div>
-        <div className="bg-white dark:bg-[#1e1e1e] rounded-2xl border border-slate-200 dark:border-slate-700 p-4 border-t-4 border-t-slate-600">
-          <p className="text-[11px] font-bold text-slate-500 dark:text-slate-400">قاصة عراقي</p>
-          <p className="text-xl font-black text-slate-800 dark:text-slate-100 mt-1 tabular-nums">{formatIqd(iqdTotal)}</p>
-        </div>
-        <div className="bg-white dark:bg-[#1e1e1e] rounded-2xl border border-slate-200 dark:border-slate-700 p-4 border-t-4 border-t-cyan-500">
-          <p className="text-[11px] font-bold text-slate-500 dark:text-slate-400">مبالغ أخرى دولار</p>
-          <input
-            value={current.otherUsd || ''}
-            onChange={(e) => updateCurrent({ otherUsd: Number(toLatinDigits(e.target.value).replace(/[^\d.]/g, '')) || 0 })}
-            disabled={!canEdit}
-            inputMode="decimal"
-            placeholder="0"
-            className="mt-1 w-full bg-transparent text-xl font-black text-cyan-700 tabular-nums outline-none"
-          />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="rounded-2xl border border-emerald-100 p-4 border-t-4 border-t-emerald-400" style={{ backgroundColor: '#ecfdf5' }}>
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-bold text-emerald-700">المتوفر دولار</p>
+              <Banknote className="w-4 h-4 text-emerald-500" />
+            </div>
+            <div className="mt-1 flex items-center gap-1">
+              <input
+                value={current.otherUsd || ''}
+                onChange={(e) => updateCurrent({ otherUsd: Number(toLatinDigits(e.target.value).replace(/[^\d.]/g, '')) || 0 })}
+                disabled={!canEdit}
+                inputMode="decimal"
+                placeholder="0"
+                className="w-full bg-transparent text-xl font-black text-emerald-700 tabular-nums outline-none"
+              />
+              <span className="text-sm font-black text-emerald-700">$</span>
+            </div>
+          </div>
+          <div className="rounded-2xl border border-amber-100 p-4 border-t-4 border-t-amber-400" style={{ backgroundColor: '#fffbeb' }}>
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-bold text-amber-700">الفرق بالدولار</p>
+              <ArrowLeftRight className="w-4 h-4 text-amber-500" />
+            </div>
+            <p className="text-xl font-black text-amber-800 mt-1 tabular-nums" dir="ltr">
+              $ {usdDifference.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
+            </p>
+          </div>
+          <div className="rounded-2xl border border-blue-100 p-4 border-t-4 border-t-blue-400" style={{ backgroundColor: '#eff6ff' }}>
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-bold text-blue-700">سعر الصرف</p>
+              <RefreshCw className="w-4 h-4 text-blue-500" />
+            </div>
+            <input
+              value={current.exchangeRate || ''}
+              onChange={(e) => updateCurrent({ exchangeRate: Number(toLatinDigits(e.target.value).replace(/[^\d.]/g, '')) || 0 })}
+              disabled={!canEdit}
+              inputMode="decimal"
+              placeholder="0"
+              className="mt-1 w-full bg-transparent text-xl font-black text-blue-700 tabular-nums outline-none"
+            />
+          </div>
+          <div className="rounded-2xl border border-violet-100 p-4 border-t-4 border-t-violet-400" style={{ backgroundColor: '#f5f3ff' }}>
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-bold text-violet-700">قاصة عراقي</p>
+              <Landmark className="w-4 h-4 text-violet-500" />
+            </div>
+            <p className="text-xl font-black text-violet-800 mt-1 tabular-nums">
+              {formatIqd(iraqiSafe)} <span className="text-sm">د.ع</span>
+            </p>
+          </div>
         </div>
       </div>
 
@@ -411,9 +593,9 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
                 const count = Number(current.counts[denom]) || 0;
                 const rowTotal = denom * count;
                 return (
-                  <tr key={denom} className="border-t border-slate-100 dark:border-slate-700">
+                  <tr key={denom} className="border-t border-slate-100 dark:border-slate-700" style={{ backgroundColor: IQD_ROW_COLORS[denom] }}>
                     <td className="px-4 py-3 font-bold text-slate-500">{index + 1}</td>
-                    <td className="px-4 py-3 font-black text-slate-800 dark:text-slate-100 tabular-nums">{formatIqd(denom)}</td>
+                    <td className="px-4 py-3 font-black text-slate-800 dark:text-slate-100 tabular-nums">{formatIqd(denom)} دينار</td>
                     <td className="px-4 py-3">
                       <input
                         value={count || ''}
@@ -435,10 +617,12 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
                 </td>
                 <td className="px-4 py-3 font-black tabular-nums">{formatIqd(iqdTotal)}</td>
               </tr>
-              <tr className="bg-amber-50 dark:bg-amber-950/30">
-                <td className="px-4 py-3 font-extrabold text-amber-800 dark:text-amber-300" colSpan={3}>الفرق</td>
-                <td className="px-4 py-3 font-black text-amber-800 dark:text-amber-300 tabular-nums">
-                  {formatIqd(iqdTotal)}
+              <tr className={tallyDifference > 0 ? 'bg-emerald-50' : tallyDifference < 0 ? 'bg-rose-50' : 'bg-slate-50'}>
+                <td className={`px-4 py-3 font-extrabold ${tallyDifference > 0 ? 'text-emerald-800' : tallyDifference < 0 ? 'text-rose-800' : 'text-slate-700'}`} colSpan={3}>الفرق</td>
+                <td className={`px-4 py-3 font-black tabular-nums ${tallyDifference > 0 ? 'text-emerald-800' : tallyDifference < 0 ? 'text-rose-800' : 'text-slate-700'}`}>
+                  {tallyDifference === 0
+                    ? 'مطابق'
+                    : `${formatIqd(Math.abs(tallyDifference))} ${tallyDifference > 0 ? 'زيادة' : 'نقص'}`}
                 </td>
               </tr>
             </tbody>
@@ -448,9 +632,15 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
 
       {canEdit && (
         <div className="bg-white dark:bg-[#1e1e1e] rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-          <div className="px-5 py-3 bg-slate-800 text-white">
+          <button
+            type="button"
+            onClick={() => setFinanceCardOpen((open) => !open)}
+            className="w-full px-5 py-3 bg-slate-800 text-white flex items-center justify-between"
+          >
             <h3 className="text-sm font-extrabold">بطاقة إدخال التفاصيل المالية — {isAir ? 'جوي' : 'بحري'}</h3>
-          </div>
+            {financeCardOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </button>
+          {financeCardOpen && (
           <div className="p-4 sm:p-5 grid grid-cols-1 md:grid-cols-2 gap-3">
             <label className="flex flex-col gap-1 text-[11px] font-extrabold text-slate-500">
               المبلغ
@@ -520,39 +710,60 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
                 className="inline-flex items-center gap-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white px-5 py-2 text-xs font-black"
               >
                 <Save className="w-4 h-4" />
-                حفظ
+                {editingDetailId ? 'تحديث' : 'حفظ'}
               </button>
             </div>
           </div>
+          )}
         </div>
       )}
 
       <div className="bg-white dark:bg-[#1e1e1e] rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-        <div className="px-5 py-3 bg-slate-800 text-white">
+        <div className="px-5 py-3 bg-slate-800 text-white flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-sm font-extrabold">جدول التفاصيل المالية — {isAir ? 'جوي' : 'بحري'}</h3>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={exportFinanceExcel}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 px-3 py-1.5 text-[11px] font-black"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              Excel
+            </button>
+            <button
+              type="button"
+              onClick={exportFinancePdf}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-rose-500 hover:bg-rose-400 text-white px-3 py-1.5 text-[11px] font-black"
+            >
+              <FileText className="w-3.5 h-3.5" />
+              PDF
+            </button>
+          </div>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm text-right">
             <thead className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs">
               <tr>
+                <th className="px-3 py-3 font-extrabold">#</th>
                 <th className="px-3 py-3 font-extrabold">المبلغ</th>
                 <th className="px-3 py-3 font-extrabold">اسم المستلم</th>
                 <th className="px-3 py-3 font-extrabold">رقم الفورم</th>
                 <th className="px-3 py-3 font-extrabold">الدليل</th>
                 <th className="px-3 py-3 font-extrabold">تاريخ التسديد</th>
-                {canEdit && <th className="px-3 py-3 font-extrabold">حذف</th>}
+                {canEdit && <th className="px-3 py-3 font-extrabold">إجراءات</th>}
               </tr>
             </thead>
             <tbody>
               {current.details.length === 0 ? (
                 <tr>
-                  <td colSpan={canEdit ? 6 : 5} className="px-4 py-10 text-center text-slate-400 font-bold text-xs">
+                  <td colSpan={canEdit ? 7 : 6} className="px-4 py-10 text-center text-slate-400 font-bold text-xs">
                     لا توجد تفاصيل مالية لهذه القاصة.
                   </td>
                 </tr>
               ) : (
-                current.details.map((row) => (
+                current.details.map((row, index) => (
                   <tr key={row.id} className="border-t border-slate-100 dark:border-slate-700">
+                    <td className="px-3 py-2 text-slate-500 font-bold">{index + 1}</td>
                     <td className="px-3 py-2 font-black tabular-nums">{row.amount || '-'}</td>
                     <td className="px-3 py-2 font-semibold">{row.recipient || '-'}</td>
                     <td className="px-3 py-2 font-semibold">{row.formNo || '-'}</td>
@@ -568,13 +779,22 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
                     <td className="px-3 py-2 font-semibold whitespace-nowrap">{row.payDate || '-'}</td>
                     {canEdit && (
                       <td className="px-3 py-2">
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveDetail(row.id)}
-                          className="inline-flex items-center justify-center rounded-lg border border-rose-200 text-rose-700 px-2 py-1"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleEditDetail(row)}
+                            className="inline-flex items-center justify-center rounded-lg border border-amber-200 text-amber-700 px-2 py-1"
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveDetail(row.id)}
+                            className="inline-flex items-center justify-center rounded-lg border border-rose-200 text-rose-700 px-2 py-1"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
                       </td>
                     )}
                   </tr>
