@@ -28,6 +28,23 @@
       -webkit-print-color-adjust: exact !important;
       print-color-adjust: exact !important;
     }
+    body * {
+      visibility: hidden !important;
+    }
+    .tally-print-root,
+    .tally-print-root * {
+      visibility: visible !important;
+    }
+    .tally-print-root {
+      position: absolute !important;
+      inset: 0 !important;
+      width: 100% !important;
+      height: auto !important;
+      background: #ffffff !important;
+    }
+    .tally-print-root .no-print {
+      display: none !important;
+    }
   }
 }
 

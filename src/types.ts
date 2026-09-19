@@ -47,6 +47,8 @@ export type ActivePage =
   | 'customer_statement'
   | 'container_radar'
   | 'warehouse_yard'
+  | 'print_prep'
+  | 'debt_aging'
   | 'user_permissions';
 
 export type CashSafeType = 'air' | 'sea';
@@ -116,6 +118,7 @@ export type CollectionStatus = 'مكتمل' | 'جزئي' | 'لم يبدأ';
 export interface CollectionRecord {
   id: string;             // Unique identifier (typically shipment.id or `${shipment.shipment}_${shipment.code}`)
   shipmentCode: string;   // كود الشحنة (e.g. RQ6042)
+  shipmentType?: string;  // نوع الشحنة (جوي، بحري)
   clientCode: string;     // كود العميل (e.g. B201)
   clientName: string;     // اسم الزبون
   guarantor: string;      // الكفيل
@@ -126,5 +129,6 @@ export interface CollectionRecord {
   driverName?: string;    // اسم السائق المسؤول عن آخر تحصيل
   notes?: string;         // ملاحظات
   lastUpdated?: string;   // تاريخ ووقت آخر حركة
+  debtRegisteredAt?: string; // تاريخ تسجيل الدين / وصول الشحنة (ثابت، لا يُعاد عند الدفع)
   payments: PaymentEntry[];
 }

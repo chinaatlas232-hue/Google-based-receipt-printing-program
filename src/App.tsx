@@ -22,6 +22,8 @@ import { CashRegisterView } from './components/CashRegisterView';
 import { CustomerStatement } from './components/CustomerStatement';
 import { ContainerRadar } from './components/ContainerRadar';
 import { WarehouseYardInventory } from './components/WarehouseYardInventory';
+import { PrintPrepView } from './components/PrintPrepView';
+import { DebtAgingView } from './components/DebtAgingView';
 import { exportShipmentsToExcel, exportYardInventoryToExcel } from './utils/excel';
 import { auth } from './services/firebaseAuth';
 import {
@@ -637,7 +639,12 @@ export default function App() {
         )}
 
         {activePage === 'customer_statement' && (
-          <CustomerStatement shipments={scopedShipments} />
+          <CustomerStatement
+            shipments={scopedShipments}
+            codeOptions={codeOptions}
+            guarantorOptions={guarantorOptions}
+            shipmentOptions={shipmentOptions}
+          />
         )}
 
         {activePage === 'container_radar' && (
@@ -646,6 +653,19 @@ export default function App() {
 
         {activePage === 'warehouse_yard' && (
           <WarehouseYardInventory />
+        )}
+
+        {activePage === 'print_prep' && (
+          <PrintPrepView />
+        )}
+
+        {activePage === 'debt_aging' && (
+          <DebtAgingView
+            shipments={scopedShipments}
+            shipmentOptions={shipmentOptions}
+            guarantorOptions={guarantorOptions}
+            codeOptions={codeOptions}
+          />
         )}
 
         {activePage === 'user_permissions' && canAccessPage(currentUser, 'user_permissions') && (

@@ -12,7 +12,6 @@ import {
   FileSpreadsheet, 
   Printer, 
   RefreshCw, 
-  UserCheck, 
   Truck, 
   History, 
   X, 
@@ -31,6 +30,7 @@ import { ShipmentRecord, CollectionRecord, PaymentEntry, CollectionStatus } from
 import { COMPANY_INFO } from '../data/initialData';
 import { ATLAS_LOGO_BASE64 } from '../data/logoBase64';
 import { YARD_INVENTORY_STORAGE_KEY } from './YardInventoryView';
+import { removePaymentFromCashRegister, syncPaymentToCashRegister } from './CashRegisterView';
 import * as XLSX from 'xlsx';
 
 interface DebtCollectionViewProps {
@@ -173,6 +173,9 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
     }).catch(() => {
       // server persistence optional
     });
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('atlas-cash-register-updated'));
+    }
   };
 
   // 2. Filters & Search State
@@ -229,6 +232,7 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
       let driverName = '';
       let notes = s.notes || '';
       let lastUpdated = '';
+      let debtRegisteredAt = '';
 
       if (saved) {
         payments = Array.isArray(saved.payments) ? saved.payments : [];
@@ -238,6 +242,7 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
         driverName = saved.driverName || '';
         notes = saved.notes || notes;
         lastUpdated = saved.lastUpdated || '';
+        debtRegisteredAt = saved.debtRegisteredAt || '';
       }
 
       const remainingAmount = Math.max(0, totalAmount - collectedAmount);
@@ -257,6 +262,7 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
       return {
         id: recId,
         shipmentCode: s.shipment || 'غير محدد',
+        shipmentType: s.type || '',
         clientCode: s.code || '',
         clientName: s.name || '',
         guarantor: s.guarantor || '',
@@ -267,6 +273,7 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
         driverName,
         notes,
         lastUpdated,
+        debtRegisteredAt,
         payments
       };
     });
@@ -458,6 +465,7 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
       driverName: inputDriver.trim() || activeRecord.driverName,
       notes: inputNotes.trim() || activeRecord.notes,
       lastUpdated: formattedDate,
+      debtRegisteredAt: activeRecord.debtRegisteredAt,
       payments: updatedPayments
     };
 
@@ -467,6 +475,16 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
     };
 
     saveCollections(newMap);
+    if (newPayment) {
+      syncPaymentToCashRegister({
+        paymentId: newPayment.id,
+        shipment: activeRecord.shipmentCode,
+        shipmentType: activeRecord.shipmentType,
+        amount: newPayment.amount,
+        time: newPayment.date,
+        userName: newPayment.driverName,
+      });
+    }
     setSaveSuccessMsg(`تم حفظ الاستحصال بنجاح! الحالة الحالية: ${newStatus === 'مكتمل' ? 'خالصة بالكامل' : 'عليها ديون متبقية'}`);
 
     setTimeout(() => {
@@ -500,7 +518,8 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
       status: newStatus,
       payments: updatedPayments,
       driverName: latestPayment ? latestPayment.driverName : (newCollected > 0 ? record.driverName : ''),
-      lastUpdated: new Date().toLocaleString('en-US')
+      lastUpdated: new Date().toLocaleString('en-US'),
+      debtRegisteredAt: record.debtRegisteredAt
     };
 
     const newMap = {
@@ -509,6 +528,7 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
     };
 
     saveCollections(newMap);
+    removePaymentFromCashRegister(paymentId);
 
     // Sync with modal records if active
     if (historyRecord && historyRecord.id === targetRecordId) {

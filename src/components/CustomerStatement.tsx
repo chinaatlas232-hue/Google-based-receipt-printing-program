@@ -14,6 +14,9 @@ interface StatementRow {
 
 interface CustomerStatementProps {
   shipments?: ShipmentRecord[];
+  codeOptions?: string[];
+  guarantorOptions?: string[];
+  shipmentOptions?: string[];
 }
 
 const COLLECTIONS_STORAGE_KEY = 'atlas_debt_collections_v2';
@@ -41,10 +44,33 @@ function shipmentDate(_item: ShipmentRecord): string {
   return '';
 }
 
-export const CustomerStatement: React.FC<CustomerStatementProps> = ({ shipments = [] }) => {
+export const CustomerStatement: React.FC<CustomerStatementProps> = ({
+  shipments = [],
+  codeOptions = [],
+  guarantorOptions = [],
+  shipmentOptions = [],
+}) => {
   const [clientCode, setClientCode] = useState('');
   const [guarantor, setGuarantor] = useState('');
   const [shipment, setShipment] = useState('');
+
+  const clientCodeChoices = useMemo(() => {
+    if (codeOptions.length) return codeOptions;
+    return Array.from(new Set(shipments.map((s) => s.code).filter(Boolean) as string[])).sort();
+  }, [codeOptions, shipments]);
+
+  const guarantorChoices = useMemo(() => {
+    if (guarantorOptions.length) return guarantorOptions;
+    return Array.from(new Set(shipments.map((s) => s.guarantor).filter(Boolean) as string[])).sort();
+  }, [guarantorOptions, shipments]);
+
+  const shipmentChoices = useMemo(() => {
+    if (shipmentOptions.length) return shipmentOptions;
+    return Array.from(new Set(shipments.map((s) => s.shipment).filter(Boolean) as string[])).sort();
+  }, [shipmentOptions, shipments]);
+
+  const selectClass =
+    'w-full rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-[#121212] px-3 py-2.5 text-sm font-semibold text-slate-800 dark:text-slate-100 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-200';
   const [queried, setQueried] = useState(false);
   const [chartOpen, setChartOpen] = useState(false);
   const [tableOpen, setTableOpen] = useState(false);
@@ -177,36 +203,42 @@ export const CustomerStatement: React.FC<CustomerStatementProps> = ({ shipments 
             <Search className="w-3.5 h-3.5 text-amber-500" />
             كود العميل
           </label>
-          <input
-            value={clientCode}
-            onChange={(e) => setClientCode(e.target.value)}
-            placeholder="مثال: B1020"
-            className="w-full rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-[#121212] px-3 py-2.5 text-sm font-semibold text-slate-800 dark:text-slate-100 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-200"
-          />
+          <select value={clientCode} onChange={(e) => setClientCode(e.target.value)} className={selectClass}>
+            <option value="">الكل</option>
+            {clientCodeChoices.map((opt) => (
+              <option key={opt} value={opt}>
+                {opt}
+              </option>
+            ))}
+          </select>
         </div>
         <div>
           <label className="mb-1.5 flex items-center gap-1 text-[11px] font-bold text-slate-700 dark:text-slate-300">
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
             الكفيل
           </label>
-          <input
-            value={guarantor}
-            onChange={(e) => setGuarantor(e.target.value)}
-            placeholder="اسم الكفيل"
-            className="w-full rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-[#121212] px-3 py-2.5 text-sm font-semibold text-slate-800 dark:text-slate-100 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-200"
-          />
+          <select value={guarantor} onChange={(e) => setGuarantor(e.target.value)} className={selectClass}>
+            <option value="">الكل</option>
+            {guarantorChoices.map((opt) => (
+              <option key={opt} value={opt}>
+                {opt}
+              </option>
+            ))}
+          </select>
         </div>
         <div>
           <label className="mb-1.5 flex items-center gap-1 text-[11px] font-bold text-slate-700 dark:text-slate-300">
             <Truck className="w-3.5 h-3.5 text-blue-500" />
             رقم الشحنة
           </label>
-          <input
-            value={shipment}
-            onChange={(e) => setShipment(e.target.value)}
-            placeholder="RA6062 / RQ6042"
-            className="w-full rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-[#121212] px-3 py-2.5 text-sm font-semibold text-slate-800 dark:text-slate-100 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-200"
-          />
+          <select value={shipment} onChange={(e) => setShipment(e.target.value)} className={selectClass}>
+            <option value="">الكل</option>
+            {shipmentChoices.map((opt) => (
+              <option key={opt} value={opt}>
+                {opt}
+              </option>
+            ))}
+          </select>
         </div>
         <div className="flex items-end no-print">
           <button

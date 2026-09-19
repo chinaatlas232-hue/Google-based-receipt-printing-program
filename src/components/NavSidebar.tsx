@@ -19,6 +19,8 @@ import {
   Hash,
   Layers,
   MapPin,
+  Printer,
+  Clock,
 } from 'lucide-react';
 import { ActivePage, FilterKey, FilterPermission, FilterState, SystemUser } from '../types';
 import { COMPANY_INFO } from '../data/initialData';
@@ -48,11 +50,13 @@ const NAV_ITEMS: { id: ActivePage; label: string; icon: React.ElementType }[] = 
   { id: 'warehouse_inventory', label: 'مطابقة الشحنة المرسلة', icon: Warehouse },
   { id: 'yard_inventory', label: 'واجهة إخراج البضائع', icon: ClipboardList },
   { id: 'debt_collection', label: 'واجهة الاستحصالات', icon: Wallet },
+  { id: 'debt_aging', label: 'أعمار الديون والديون المتأخرة', icon: Clock },
   { id: 'cash_register', label: 'واجهة القاصة', icon: Landmark },
   { id: 'reports', label: 'تقارير', icon: BarChart3 },
   { id: 'warehouse_yard', label: 'جرد المستودع والساحة', icon: Warehouse },
   { id: 'customer_statement', label: 'كشف حساب عميل', icon: User },
   { id: 'container_radar', label: 'رادار تتبع الحاويات', icon: Ship },
+  { id: 'print_prep', label: 'التحظير الطباعي', icon: Printer },
   { id: 'user_permissions', label: 'صلاحيات المستخدمين', icon: Shield },
 ];
 
@@ -151,7 +155,7 @@ export const NavSidebar: React.FC<NavSidebarProps> = ({
         </div>
 
         <nav className="px-3 py-2 space-y-1">
-          {NAV_ITEMS.filter((item) => item.id === 'customer_statement' || item.id === 'container_radar' || item.id === 'warehouse_yard' || canAccessPage(currentUser ?? null, item.id)).map((item) => {
+          {NAV_ITEMS.filter((item) => item.id === 'customer_statement' || item.id === 'container_radar' || item.id === 'warehouse_yard' || item.id === 'print_prep' || item.id === 'debt_aging' || canAccessPage(currentUser ?? null, item.id)).map((item) => {
             const Icon = item.icon;
             const isActive = activePage === item.id;
             return (
