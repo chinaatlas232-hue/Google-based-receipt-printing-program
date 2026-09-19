@@ -37,6 +37,10 @@ interface DebtCollectionViewProps {
   shipments: ShipmentRecord[];
   onSyncDrive?: () => void;
   isSyncing?: boolean;
+  canRecordPayment?: boolean;
+  canDeletePayment?: boolean;
+  canExport?: boolean;
+  canPrint?: boolean;
 }
 
 const STORAGE_KEY = 'atlas_debt_collections_v2';
@@ -44,7 +48,11 @@ const STORAGE_KEY = 'atlas_debt_collections_v2';
 export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
   shipments,
   onSyncDrive,
-  isSyncing = false
+  isSyncing = false,
+  canRecordPayment = true,
+  canDeletePayment = true,
+  canExport = true,
+  canPrint = true,
 }) => {
   // 1. Saved Collections State (Local persistence + Server sync)
   const [collectionMap, setCollectionMap] = useState<Record<string, CollectionRecord>>(() => {
@@ -367,6 +375,7 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
 
   // Open Payment Modal
   const handleOpenPayment = (record: CollectionRecord) => {
+    if (!canRecordPayment) return;
     setActiveRecord(record);
     setInputAmount('');
     setInputDriver(record.driverName || '');
@@ -978,6 +987,7 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
               </button>
             )}
 
+            {canExport && (
             <button
               onClick={handleExportExcel}
               className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md transition-all active:scale-95 cursor-pointer"
@@ -985,7 +995,9 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
               <FileSpreadsheet className="w-4 h-4" />
               <span>تصدير Excel</span>
             </button>
+            )}
 
+            {canPrint && (
             <button
               onClick={handlePrint}
               className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs border border-slate-600 shadow-md transition-all active:scale-95 cursor-pointer"
@@ -993,6 +1005,7 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
               <Printer className="w-4 h-4 text-amber-400" />
               <span>طباعة الكشف</span>
             </button>
+            )}
           </div>
         </div>
       </div>
@@ -1373,7 +1386,7 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
                       {/* Actions */}
                       <td className="py-3 px-3 text-center">
                         <div className="flex items-center justify-center gap-1.5">
-                          {/* Quick Payment Button */}
+                          {canRecordPayment && (
                           <button
                             onClick={() => handleOpenPayment(item)}
                             className="px-2.5 py-1.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black text-xs rounded-lg shadow-sm active:scale-95 transition-all flex items-center gap-1 cursor-pointer"
@@ -1382,6 +1395,7 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
                             <PlusCircle className="w-3.5 h-3.5 stroke-[2.5]" />
                             <span>استحصال</span>
                           </button>
+                          )}
 
                           {/* Payment History Button */}
                           <button
@@ -1392,7 +1406,7 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
                             <History className="w-3.5 h-3.5" />
                           </button>
 
-                          {/* Quick Print Statement Button */}
+                          {canPrint && (
                           <button
                             onClick={() => handlePrintPaymentStatement(item)}
                             className="p-1.5 bg-slate-100 hover:bg-amber-50 text-slate-600 hover:text-amber-700 rounded-lg transition-colors border border-slate-200"
@@ -1400,8 +1414,9 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
                           >
                             <Printer className="w-3.5 h-3.5" />
                           </button>
+                          )}
 
-                          {/* Delete / Revert Transaction Button */}
+                          {canDeletePayment && (
                           <button
                             onClick={() => handleOpenDeleteDialog(item)}
                             disabled={!item.payments || item.payments.length === 0}
@@ -1418,6 +1433,7 @@ export const DebtCollectionView: React.FC<DebtCollectionViewProps> = ({
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
+                          )}
                         </div>
                       </td>
                     </tr>

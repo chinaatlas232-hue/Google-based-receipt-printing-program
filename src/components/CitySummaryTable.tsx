@@ -7,7 +7,7 @@ interface CitySummaryTableProps {
 }
 
 export const CitySummaryTable: React.FC<CitySummaryTableProps> = ({ summaries }) => {
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(true);
 
   if (summaries.length === 0) return null;
 

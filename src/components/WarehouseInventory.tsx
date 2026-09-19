@@ -19,9 +19,17 @@ import { YARD_INVENTORY_STORAGE_KEY, toLatinDigits, YardDraftData } from './Yard
 
 interface WarehouseInventoryProps {
   shipments: ShipmentRecord[];
+  canTally?: boolean;
+  canPrint?: boolean;
+  allowedShipments?: string[];
 }
 
-export const WarehouseInventory: React.FC<WarehouseInventoryProps> = ({ shipments }) => {
+export const WarehouseInventory: React.FC<WarehouseInventoryProps> = ({
+  shipments,
+  canTally = true,
+  canPrint = true,
+  allowedShipments = [],
+}) => {
   const [selectedShipment, setSelectedShipment] = useState<string>('');
   const [inventoryDate, setInventoryDate] = useState<string>(() =>
     new Date().toISOString().slice(0, 10)
@@ -36,8 +44,10 @@ export const WarehouseInventory: React.FC<WarehouseInventoryProps> = ({ shipment
       const value = (s.shipment || '').trim();
       if (value && !unique.includes(value)) unique.push(value);
     });
-    return unique.sort((a, b) => a.localeCompare(b, 'ar'));
-  }, [shipments]);
+    const sorted = unique.sort((a, b) => a.localeCompare(b, 'ar'));
+    if (!allowedShipments.length) return sorted;
+    return sorted.filter(v => allowedShipments.includes(v));
+  }, [shipments, allowedShipments]);
 
   const shipmentItems = useMemo(() => {
     if (!selectedShipment) return [];
@@ -84,15 +94,18 @@ export const WarehouseInventory: React.FC<WarehouseInventoryProps> = ({ shipment
   const hasSelection = selectedShipment !== '';
 
   const handleActualCountChange = (id: string, raw: string) => {
+    if (!canTally) return;
     const digits = toLatinDigits(raw).replace(/[^\d]/g, '');
     setActualCounts(prev => ({ ...prev, [id]: digits === '' ? '' : Number(digits) }));
   };
 
   const handleToggleCheck = (id: string) => {
+    if (!canTally) return;
     setCheckedItems(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
   const handleReset = () => {
+    if (!canTally) return;
     setCheckedItems({});
     setActualCounts({});
   };
@@ -100,7 +113,7 @@ export const WarehouseInventory: React.FC<WarehouseInventoryProps> = ({ shipment
   // "مطابقة الشحنة بالكامل": fill every actual-tally field of the selected shipment
   // with the registered packages count so the tally matches exactly (result = 0).
   const handleMatchEntireShipment = () => {
-    if (!hasSelection) return;
+    if (!canTally || !hasSelection) return;
     const scope = shipments.filter(s => (s.shipment || '').trim() === selectedShipment);
 
     setActualCounts(prev => {
@@ -121,6 +134,7 @@ export const WarehouseInventory: React.FC<WarehouseInventoryProps> = ({ shipment
   };
 
   const handleSave = () => {
+    if (!canTally) return;
     try {
       localStorage.setItem(
         'atlas_warehouse_inventory_draft',
@@ -355,6 +369,7 @@ export const WarehouseInventory: React.FC<WarehouseInventoryProps> = ({ shipment
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {canTally && (
             <button
               onClick={handleMatchEntireShipment}
               disabled={!hasSelection}
@@ -364,7 +379,9 @@ export const WarehouseInventory: React.FC<WarehouseInventoryProps> = ({ shipment
               <CheckCheck className="w-3.5 h-3.5" />
               <span>مطابقة الشحنة بالكامل</span>
             </button>
+            )}
 
+            {canTally && (
             <button
               onClick={handleSave}
               disabled={!hasSelection}
@@ -373,7 +390,9 @@ export const WarehouseInventory: React.FC<WarehouseInventoryProps> = ({ shipment
               <Save className="w-3.5 h-3.5" />
               <span>حفظ</span>
             </button>
+            )}
 
+            {canPrint && (
             <button
               onClick={handlePrint}
               disabled={!hasSelection}
@@ -382,7 +401,9 @@ export const WarehouseInventory: React.FC<WarehouseInventoryProps> = ({ shipment
               <Printer className="w-3.5 h-3.5" />
               <span>طباعة</span>
             </button>
+            )}
 
+            {canTally && (
             <button
               onClick={handleReset}
               disabled={!hasSelection}
@@ -391,6 +412,7 @@ export const WarehouseInventory: React.FC<WarehouseInventoryProps> = ({ shipment
               <RotateCcw className="w-3.5 h-3.5" />
               <span>تصفير الجرد</span>
             </button>
+            )}
           </div>
         </div>
 
@@ -434,6 +456,7 @@ export const WarehouseInventory: React.FC<WarehouseInventoryProps> = ({ shipment
                         <button
                           type="button"
                           onClick={() => handleToggleCheck(item.id)}
+                          disabled={!canTally}
                           className={`mx-auto flex h-6 w-6 items-center justify-center rounded-md border transition-all ${
                             isChecked
                               ? 'border-emerald-500 bg-emerald-500 text-white'
@@ -463,6 +486,7 @@ export const WarehouseInventory: React.FC<WarehouseInventoryProps> = ({ shipment
                           inputMode="numeric"
                           value={actual}
                           onChange={e => handleActualCountChange(item.id, e.target.value)}
+                          disabled={!canTally}
                           placeholder={String(item.packages)}
                           className={`w-24 rounded-lg border px-2 py-1.5 text-center font-bold tabular-nums outline-none transition-all focus:ring-2 ${
                             isMismatch

@@ -1,12 +1,11 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { RefreshCw, CheckCircle2, AlertCircle, X, SlidersHorizontal, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
-import { ShipmentRecord, FilterState, CitySummary, ActivePage } from './types';
+import { RefreshCw, CheckCircle2, AlertCircle, X } from 'lucide-react';
+import { ShipmentRecord, FilterState, CitySummary, ActivePage, SystemUser } from './types';
 import { initialShipments } from './data/initialData';
+import { defaultUsers } from './data/users';
 import { Header } from './components/Header';
+import { NavSidebar } from './components/NavSidebar';
 import { MetricCards } from './components/MetricCards';
-import { FiltersBar } from './components/FiltersBar';
-import { ImportExportBar } from './components/ImportExportBar';
-import { DashboardSidebar } from './components/DashboardSidebar';
 import { CitySummaryTable } from './components/CitySummaryTable';
 import { ShipmentTable } from './components/ShipmentTable';
 import { ReceiptModal } from './components/ReceiptModal';
@@ -18,10 +17,74 @@ import { YardInventoryView } from './components/YardInventoryView';
 import { WarehouseInventory } from './components/WarehouseInventory';
 import { ShipmentReportsView } from './components/ShipmentReportsView';
 import { DebtCollectionView } from './components/DebtCollectionView';
+import { UserPermissionsView } from './components/UserPermissionsView';
+import { CashRegisterView } from './components/CashRegisterView';
+import { CustomerStatement } from './components/CustomerStatement';
+import { ContainerRadar } from './components/ContainerRadar';
+import { WarehouseYardInventory } from './components/WarehouseYardInventory';
 import { exportShipmentsToExcel, exportYardInventoryToExcel } from './utils/excel';
 import { auth } from './services/firebaseAuth';
+import {
+  applyPermissionScope,
+  canAccessPage,
+  canDoAction,
+  canEditPage,
+  constrainFilterState,
+  constrainOptions,
+  defaultFiltersForUser,
+  firstAccessiblePage,
+  normalizePermissions,
+} from './auth/permissions';
+
+const USERS_STORAGE_KEY = 'atlas_system_users_v5';
+
+function hydrateUsers(stored?: SystemUser[]): SystemUser[] {
+  const byUsername = new Map<string, SystemUser>();
+  defaultUsers.forEach((user) => {
+    byUsername.set(user.username.toLowerCase(), {
+      ...user,
+      permissions: normalizePermissions(user.permissions),
+    });
+  });
+  (stored ?? []).forEach((user) => {
+    if (!user?.username) return;
+    const key = String(user.username).toLowerCase();
+    const current = byUsername.get(key);
+    byUsername.set(key, {
+      ...(current ?? user),
+      ...user,
+      username: current?.username ?? String(user.username).trim(),
+      permissions: normalizePermissions(user.permissions ?? current?.permissions),
+    });
+  });
+  return Array.from(byUsername.values());
+}
 
 export default function App() {
+  const [users, setUsers] = useState<SystemUser[]>(() => {
+    try {
+      const saved = localStorage.getItem(USERS_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return hydrateUsers(parsed);
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    return hydrateUsers();
+  });
+
+  const currentUser = useMemo(
+    () =>
+      users.find((u) => u.username === 'admin') ??
+      users.find((u) => u.role === 'مدير النظام') ??
+      users[0] ??
+      defaultUsers[0],
+    [users]
+  );
+
   // 1. Data State (with local persistence for seamless editing)
   const [shipments, setShipments] = useState<ShipmentRecord[]>(() => {
     try {
@@ -54,27 +117,7 @@ export default function App() {
   // Whether we have ever adopted server data; the first successful load always wins.
   const dataLoadedRef = useRef(false);
 
-  // Sidebar Visibility State (Full Width Expansion)
-  const [isSidebarVisible, setIsSidebarVisible] = useState<boolean>(() => {
-    try {
-      const saved = localStorage.getItem('atlas_sidebar_visible');
-      return saved !== null ? saved === 'true' : true;
-    } catch {
-      return true;
-    }
-  });
 
-  const handleToggleSidebar = () => {
-    setIsSidebarVisible(prev => {
-      const next = !prev;
-      try {
-        localStorage.setItem('atlas_sidebar_visible', String(next));
-      } catch (e) {
-        console.error(e);
-      }
-      return next;
-    });
-  };
 
   // Fetch real merged data from server backend on mount and auto-sync periodically.
   // Only replaces local state when the server reports the data actually changed,
@@ -191,18 +234,44 @@ export default function App() {
     }
   }, [shipments]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [users]);
+
   // 2. Navigation State
   const [activePage, setActivePage] = useState<ActivePage>('dashboard');
+  const [isNavOpen, setIsNavOpen] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    return window.innerWidth >= 1024;
+  });
+  const [darkMode, setDarkMode] = useState(() => {
+    try {
+      return localStorage.getItem('atlas_dark_mode') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', darkMode);
+    document.body.classList.toggle('dark-mode', darkMode);
+    try {
+      localStorage.setItem('atlas_dark_mode', String(darkMode));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [darkMode]);
 
   // 3. Filter State
-  const [filters, setFilters] = useState<FilterState>({
-    shipment: 'الكل',
-    guarantor: 'الكل',
-    code: 'الكل',
-    type: 'الكل',
-    city: 'الكل',
-    searchQuery: '',
-  });
+  const [filters, setFilters] = useState<FilterState>(() => defaultFiltersForUser(currentUser));
+
+  const handleSaveUser = (updated: SystemUser) => {
+    setUsers((prev) => prev.map((u) => (u.id === updated.id ? updated : u)));
+  };
 
   // 4. Modal States
   const [receiptModalOpen, setReceiptModalOpen] = useState(false);
@@ -215,35 +284,55 @@ export default function App() {
   const [editingShipment, setEditingShipment] = useState<ShipmentRecord | null>(null);
   const [driveModalOpen, setDriveModalOpen] = useState(false);
 
+  const scopedShipments = useMemo(
+    () => applyPermissionScope(shipments, currentUser),
+    [shipments, currentUser]
+  );
+
   // 5. Unique Filter Options Extraction
   const shipmentOptions = useMemo(() => {
-    const set = new Set(shipments.map(s => s.shipment).filter(Boolean));
-    return Array.from(set).sort();
-  }, [shipments]);
+    const set = new Set(scopedShipments.map(s => s.shipment).filter(Boolean) as string[]);
+    return constrainOptions(Array.from(set).sort(), currentUser?.permissions.filters.shipment ?? { allowed: true, allowedValues: [] });
+  }, [scopedShipments, currentUser]);
 
   const guarantorOptions = useMemo(() => {
-    const set = new Set(shipments.map(s => s.guarantor).filter(Boolean));
-    return Array.from(set).sort();
-  }, [shipments]);
+    const set = new Set(scopedShipments.map(s => s.guarantor).filter(Boolean) as string[]);
+    return constrainOptions(Array.from(set).sort(), currentUser?.permissions.filters.guarantor ?? { allowed: true, allowedValues: [] });
+  }, [scopedShipments, currentUser]);
 
   const codeOptions = useMemo(() => {
-    const set = new Set(shipments.map(s => s.code).filter(Boolean));
-    return Array.from(set).sort();
-  }, [shipments]);
+    const set = new Set(scopedShipments.map(s => s.code).filter(Boolean) as string[]);
+    return constrainOptions(Array.from(set).sort(), currentUser?.permissions.filters.code ?? { allowed: true, allowedValues: [] });
+  }, [scopedShipments, currentUser]);
 
   const typeOptions = useMemo(() => {
-    const set = new Set(shipments.map(s => s.type).filter(Boolean));
-    return Array.from(set).sort();
-  }, [shipments]);
+    const set = new Set(scopedShipments.map(s => s.type).filter(Boolean) as string[]);
+    return constrainOptions(Array.from(set).sort(), currentUser?.permissions.filters.type ?? { allowed: true, allowedValues: [] });
+  }, [scopedShipments, currentUser]);
 
   const cityOptions = useMemo(() => {
-    const set = new Set(shipments.map(s => s.city).filter(Boolean));
-    return Array.from(set).sort();
-  }, [shipments]);
+    const set = new Set(scopedShipments.map(s => s.city).filter(Boolean) as string[]);
+    return constrainOptions(Array.from(set).sort(), currentUser?.permissions.filters.city ?? { allowed: true, allowedValues: [] });
+  }, [scopedShipments, currentUser]);
+
+  const applyFilters = (next: FilterState | ((prev: FilterState) => FilterState)) => {
+    setFilters((prev) => {
+      const resolved = typeof next === 'function' ? next(prev) : next;
+      return constrainFilterState(resolved, currentUser);
+    });
+  };
+
+  useEffect(() => {
+    if (!currentUser) return;
+    setFilters((prev) => constrainFilterState(prev, currentUser));
+    if (!canAccessPage(currentUser, activePage)) {
+      setActivePage(firstAccessiblePage(currentUser));
+    }
+  }, [currentUser, activePage]);
 
   // 6. Filtered Shipments Logic
   const filteredShipments = useMemo(() => {
-    return shipments.filter(item => {
+    return scopedShipments.filter(item => {
       // Filter by Shipment
       if (filters.shipment !== 'الكل' && item.shipment !== filters.shipment) {
         return false;
@@ -282,7 +371,7 @@ export default function App() {
 
       return true;
     });
-  }, [shipments, filters]);
+  }, [scopedShipments, filters]);
 
   // 7. Calculate Aggregated City Summaries
   const citySummaries = useMemo<CitySummary[]>(() => {
@@ -349,18 +438,21 @@ export default function App() {
 
   // 9. Handlers
   const handleViewReceipt = (item: ShipmentRecord) => {
+    if (!canDoAction(currentUser, 'view_receipt')) return;
     setModalShipments([item]);
     setIsBatchReceipt(false);
     setReceiptModalOpen(true);
   };
 
   const handlePrintSingleReceipt = (item: ShipmentRecord) => {
+    if (!canDoAction(currentUser, 'print_receipts')) return;
     setModalShipments([item]);
     setIsBatchReceipt(false);
     setReceiptModalOpen(true);
   };
 
   const handlePrintAllReceipts = () => {
+    if (!canDoAction(currentUser, 'print_receipts')) return;
     if (filteredShipments.length === 0) return;
     setModalShipments(filteredShipments);
     setIsBatchReceipt(true);
@@ -368,17 +460,20 @@ export default function App() {
   };
 
   const handleOpenEdit = (item: ShipmentRecord) => {
+    if (!canDoAction(currentUser, 'edit_shipment')) return;
     setEditingShipment(item);
     setAddModalOpen(true);
   };
 
   const handleDeleteShipment = (id: string) => {
+    if (!canDoAction(currentUser, 'delete_shipment')) return;
     if (window.confirm('هل أنت متأكد من حذف هذا السجل نهائياً؟')) {
       setShipments(prev => prev.filter(s => s.id !== id));
     }
   };
 
   const handleSaveShipment = (record: ShipmentRecord) => {
+    if (!canDoAction(currentUser, 'edit_shipment')) return;
     setShipments(prev => {
       const existsIndex = prev.findIndex(s => s.id === record.id);
       if (existsIndex >= 0) {
@@ -400,23 +495,49 @@ export default function App() {
     setDriveModalOpen(false);
   };
 
+  const allowSync = canDoAction(currentUser, 'sync_drive');
+  const allowPrintReceipts = canDoAction(currentUser, 'print_receipts');
+  const allowPrintYard = canDoAction(currentUser, 'print_yard');
+  const allowPrintFull = canDoAction(currentUser, 'print_full_report');
+  const allowExportExcel = canDoAction(currentUser, 'export_excel');
+  const allowExportYard = canDoAction(currentUser, 'export_yard_excel');
+
   return (
-    <div className="min-h-screen bg-slate-100/70 text-slate-900 font-['Cairo'] flex flex-col selection:bg-amber-100 selection:text-amber-900">
-      {/* 1. Top Navigation & Brand Header */}
-      <Header
+    <div className="min-h-screen bg-slate-100/70 text-slate-900 dark:bg-[#121212] dark:text-slate-100 font-['Cairo'] flex selection:bg-amber-100 selection:text-amber-900">
+      <NavSidebar
         activePage={activePage}
         setActivePage={setActivePage}
-        isSidebarVisible={isSidebarVisible}
-        onToggleSidebar={handleToggleSidebar}
-        onSyncDrive={handleDirectDriveSync}
-        isSyncing={isDriveSyncing}
-        lastSyncTime={lastSyncTime}
-        lastChangeTime={lastChangeTime}
-        syncOutcome={syncOutcome}
-        syncDelta={syncDelta}
+        isOpen={isNavOpen}
+        onClose={() => setIsNavOpen(false)}
+        currentUser={currentUser}
+        filters={filters}
+        setFilters={applyFilters}
+        shipmentOptions={shipmentOptions}
+        guarantorOptions={guarantorOptions}
+        codeOptions={codeOptions}
+        typeOptions={typeOptions}
+        cityOptions={cityOptions}
+        filterPermissions={currentUser.permissions.filters}
+        totalMatches={filteredShipments.length}
+        totalAll={scopedShipments.length}
       />
 
-      {/* 2. Main Page Content (Full Width) */}
+      <div className="flex-1 flex flex-col min-w-0 min-h-screen transition-all duration-300">
+      <Header
+        activePage={activePage}
+        onSyncDrive={allowSync ? handleDirectDriveSync : undefined}
+        isSyncing={isDriveSyncing}
+        lastSyncTime={lastSyncTime}
+        syncOutcome={syncOutcome}
+        syncDelta={syncDelta}
+        onOpenNav={() => setIsNavOpen(true)}
+        onToggleNav={() => setIsNavOpen((prev) => !prev)}
+        isNavOpen={isNavOpen}
+        darkMode={darkMode}
+        onToggleDarkMode={() => setDarkMode((prev) => !prev)}
+        currentUser={currentUser}
+      />
+
       <main className="flex-1 w-full px-3 sm:px-4 lg:px-5 py-4">
         {/* Real-time sync status banner */}
         {syncBanner && (
@@ -442,125 +563,98 @@ export default function App() {
           </div>
         )}
 
-        {activePage === 'dashboard' && (
-          <div className="flex flex-col lg:flex-row items-start gap-4 xl:gap-5 w-full">
-            {/* Dedicated Sidebar for Filters & Print/Export Actions */}
-            {isSidebarVisible && (
-              <DashboardSidebar
-                filters={filters}
-                setFilters={setFilters}
-                shipmentOptions={shipmentOptions}
-                guarantorOptions={guarantorOptions}
-                codeOptions={codeOptions}
-                typeOptions={typeOptions}
-                cityOptions={cityOptions}
-                totalMatches={filteredShipments.length}
-                totalAll={shipments.length}
-                onPrintAllReceipts={handlePrintAllReceipts}
-                onPrintYardInventory={() => setYardModalOpen(true)}
-                onPrintFullReport={() => setFullReportModalOpen(true)}
-                onExportExcel={() => exportShipmentsToExcel(filteredShipments, citySummaries, `تقرير_أطلس_الشحنة_${filters.shipment}`)}
-                onExportYardExcel={() => exportYardInventoryToExcel(filteredShipments, filters.shipment)}
-                onSyncDrive={handleDirectDriveSync}
-                isSyncing={isDriveSyncing}
-                receiptCount={filteredShipments.length}
-                onCloseSidebar={() => {
-                  setIsSidebarVisible(false);
-                  try {
-                    localStorage.setItem('atlas_sidebar_visible', 'false');
-                  } catch (e) {
-                    console.error(e);
-                  }
-                }}
-              />
-            )}
-
-            {/* Main Center Area: Metric Cards -> City Summary Table -> Master Details Table */}
-            <div className={`w-full ${isSidebarVisible ? 'flex-1 min-w-0' : 'w-full'} space-y-5`}>
-              {/* If sidebar is hidden, show a prominent banner to restore or see current filter state */}
-              {!isSidebarVisible && (
-                <div className="bg-gradient-to-r from-slate-800 via-slate-800 to-slate-750 text-white rounded-2xl p-3.5 px-5 shadow-md flex flex-wrap items-center justify-between gap-3 border border-slate-700/60 transition-all">
-                  <div className="flex items-center gap-3 text-xs">
-                    <span className="flex h-3 w-3 relative shrink-0">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-400"></span>
-                    </span>
-                    <div>
-                      <div className="font-extrabold text-amber-300 text-sm font-['Cairo'] flex items-center gap-2">
-                        <span>وضع التوسيع الكامل (100% Full Width)</span>
-                        <span className="text-[11px] font-normal text-slate-300 hidden sm:inline">
-                          — تم إخفاء الشريط الجانبي لتوفير أقصى اتساع للجداول
-                        </span>
-                      </div>
-                      <div className="text-[11px] text-slate-300 mt-0.5">
-                        عدد السجلات المعروضة: <b className="text-white">{filteredShipments.length}</b> من أصل <b className="text-white">{shipments.length}</b>
-                        {filters.shipment !== 'الكل' && <span className="text-amber-300 mr-2 font-bold">• شحنة: {filters.shipment}</span>}
-                        {filters.city !== 'الكل' && <span className="text-blue-300 mr-2 font-bold">• محافظة: {filters.city}</span>}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={handleToggleSidebar}
-                      className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs shadow-md shadow-amber-400/20 active:scale-95 transition-all cursor-pointer"
-                    >
-                      <SlidersHorizontal className="w-4 h-4 stroke-[2.5]" />
-                      <span>إظهار الشريط الجانبي (الفلاتر وأوامر الطباعة)</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-              {/* KPI Metric Cards */}
-              <MetricCards
-                clientCount={totalClients}
-                packagesCount={totalPackages}
-                cbmTotal={totalCbm}
-                weightTotal={totalWeight}
-                salesTotal={totalSales}
-              />
-
-              {/* City & Governorates Summary Table */}
-              <CitySummaryTable summaries={citySummaries} />
-
-              {/* Pristine Master Shipments Table */}
-              <ShipmentTable
-                shipments={filteredShipments}
-                onViewReceipt={handleViewReceipt}
-                onPrintReceipt={handlePrintSingleReceipt}
-                onEditShipment={handleOpenEdit}
-                onDeleteShipment={handleDeleteShipment}
-                onSyncDrive={handleDirectDriveSync}
-                isSyncing={isDriveSyncing}
-              />
-            </div>
+        {activePage === 'dashboard' && canAccessPage(currentUser, 'dashboard') && (
+          <div className="w-full space-y-5">
+            <MetricCards
+              clientCount={totalClients}
+              packagesCount={totalPackages}
+              cbmTotal={totalCbm}
+              weightTotal={totalWeight}
+              salesTotal={totalSales}
+            />
+            <CitySummaryTable summaries={citySummaries} />
+            <ShipmentTable
+              shipments={filteredShipments}
+              onViewReceipt={handleViewReceipt}
+              onPrintReceipt={handlePrintSingleReceipt}
+              onEditShipment={handleOpenEdit}
+              onDeleteShipment={handleDeleteShipment}
+              onSyncDrive={allowSync ? handleDirectDriveSync : undefined}
+              isSyncing={isDriveSyncing}
+              canViewReceipt={canDoAction(currentUser, 'view_receipt')}
+              canPrint={allowPrintReceipts}
+              canEdit={canDoAction(currentUser, 'edit_shipment')}
+              canDelete={canDoAction(currentUser, 'delete_shipment')}
+            />
           </div>
         )}
 
-        {activePage === 'yard_inventory' && (
+        {activePage === 'yard_inventory' && canAccessPage(currentUser, 'yard_inventory') && (
           <YardInventoryView 
-            shipments={shipments} 
+            shipments={scopedShipments} 
             onNavigateToDashboard={() => setActivePage('dashboard')}
+            canDispatch={canDoAction(currentUser, 'dispatch_goods') && canEditPage(currentUser, 'yard_inventory')}
+            canExport={allowExportYard}
+            canPrint={allowPrintYard}
+            loggedInUserName={currentUser.name}
           />
         )}
 
-        {activePage === 'warehouse_inventory' && (
-          <WarehouseInventory shipments={shipments} />
+        {activePage === 'warehouse_inventory' && canAccessPage(currentUser, 'warehouse_inventory') && (
+          <WarehouseInventory
+            shipments={scopedShipments}
+            canTally={canDoAction(currentUser, 'warehouse_tally') && canEditPage(currentUser, 'warehouse_inventory')}
+            canPrint={canDoAction(currentUser, 'warehouse_print')}
+            allowedShipments={currentUser.permissions.filters.shipment.allowedValues}
+          />
         )}
 
-        {activePage === 'reports' && (
+        {activePage === 'reports' && canAccessPage(currentUser, 'reports') && (
           <ShipmentReportsView 
-            shipments={shipments} 
-            onSyncDrive={handleDirectDriveSync} 
+            shipments={scopedShipments} 
+            onSyncDrive={allowSync ? handleDirectDriveSync : undefined} 
             isSyncing={isDriveSyncing} 
           />
         )}
 
-        {activePage === 'debt_collection' && (
+        {activePage === 'debt_collection' && canAccessPage(currentUser, 'debt_collection') && (
           <DebtCollectionView
-            shipments={shipments}
-            onSyncDrive={handleDirectDriveSync}
+            shipments={scopedShipments}
+            onSyncDrive={allowSync ? handleDirectDriveSync : undefined}
             isSyncing={isDriveSyncing}
+            canRecordPayment={canDoAction(currentUser, 'record_payment') && canEditPage(currentUser, 'debt_collection')}
+            canDeletePayment={canDoAction(currentUser, 'delete_payment') && canEditPage(currentUser, 'debt_collection')}
+            canExport={allowExportExcel}
+            canPrint={allowPrintReceipts}
+          />
+        )}
+
+        {activePage === 'cash_register' && canAccessPage(currentUser, 'cash_register') && (
+          <CashRegisterView
+            userName={currentUser.name}
+            canEdit={canEditPage(currentUser, 'cash_register')}
+          />
+        )}
+
+        {activePage === 'customer_statement' && (
+          <CustomerStatement shipments={scopedShipments} />
+        )}
+
+        {activePage === 'container_radar' && (
+          <ContainerRadar />
+        )}
+
+        {activePage === 'warehouse_yard' && (
+          <WarehouseYardInventory />
+        )}
+
+        {activePage === 'user_permissions' && canAccessPage(currentUser, 'user_permissions') && (
+          <UserPermissionsView
+            users={users}
+            currentUser={currentUser}
+            shipments={shipments}
+            canManage={canDoAction(currentUser, 'manage_users') && canEditPage(currentUser, 'user_permissions')}
+            onSaveUser={handleSaveUser}
           />
         )}
       </main>
@@ -622,6 +716,7 @@ export default function App() {
         onDataLoaded={handleDataLoadedFromImport}
         currentCount={shipments.length}
       />
+      </div>
     </div>
   );
 }

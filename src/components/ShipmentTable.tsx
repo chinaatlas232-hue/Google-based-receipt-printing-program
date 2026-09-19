@@ -26,6 +26,10 @@ interface ShipmentTableProps {
   onDeleteShipment: (id: string) => void;
   onSyncDrive?: () => void;
   isSyncing?: boolean;
+  canViewReceipt?: boolean;
+  canPrint?: boolean;
+  canEdit?: boolean;
+  canDelete?: boolean;
 }
 
 type SortField = 'code' | 'name' | 'weight' | 'cbm' | 'packages' | 'price' | 'sales' | 'shipment';
@@ -61,6 +65,10 @@ export const ShipmentTable: React.FC<ShipmentTableProps> = ({
   onDeleteShipment,
   onSyncDrive,
   isSyncing = false,
+  canViewReceipt = true,
+  canPrint = true,
+  canEdit = true,
+  canDelete = true,
 }) => {
   const [sortField, setSortField] = useState<SortField>('code');
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
@@ -419,7 +427,7 @@ export const ShipmentTable: React.FC<ShipmentTableProps> = ({
                     {showActionsColumn && (
                       <td className="py-3 px-3 text-center whitespace-nowrap sticky left-0 bg-white group-hover:bg-amber-50/50 z-10 border-r border-slate-200 shadow-sm">
                         <div className="flex items-center justify-center gap-1.5">
-                          {/* Print Receipt */}
+                          {canPrint && (
                           <button
                             onClick={() => onPrintReceipt(row)}
                             className="p-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 transition-colors shadow-xs cursor-pointer"
@@ -427,8 +435,9 @@ export const ShipmentTable: React.FC<ShipmentTableProps> = ({
                           >
                             <Printer className="w-3.5 h-3.5" />
                           </button>
+                          )}
 
-                          {/* View Modal */}
+                          {canViewReceipt && (
                           <button
                             onClick={() => onViewReceipt(row)}
                             className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
@@ -436,8 +445,9 @@ export const ShipmentTable: React.FC<ShipmentTableProps> = ({
                           >
                             <Eye className="w-3.5 h-3.5" />
                           </button>
+                          )}
 
-                          {/* Edit Record */}
+                          {canEdit && (
                           <button
                             onClick={() => onEditShipment(row)}
                             className="p-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 transition-colors cursor-pointer"
@@ -445,8 +455,9 @@ export const ShipmentTable: React.FC<ShipmentTableProps> = ({
                           >
                             <Edit3 className="w-3.5 h-3.5" />
                           </button>
+                          )}
 
-                          {/* Delete Record */}
+                          {canDelete && (
                           <button
                             onClick={() => onDeleteShipment(row.id)}
                             className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 transition-colors cursor-pointer"
@@ -454,6 +465,7 @@ export const ShipmentTable: React.FC<ShipmentTableProps> = ({
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
+                          )}
                         </div>
                       </td>
                     )}

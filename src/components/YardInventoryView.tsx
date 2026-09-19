@@ -36,7 +36,8 @@ import {
   X,
   Search,
   Filter,
-  Layers
+  Layers,
+  Undo2
 } from 'lucide-react';
 import { ShipmentRecord } from '../types';
 import { COMPANY_INFO } from '../data/initialData';
@@ -59,6 +60,7 @@ export interface DispatchMovement {
   time: string;
   fullDateTime: string;
   user?: string;
+  type?: 'dispatch' | 'return';
 }
 
 export interface YardDraftData {
@@ -150,11 +152,19 @@ export const formatEntryDate = (isoDate?: string): string => {
 interface YardInventoryViewProps {
   shipments: ShipmentRecord[];
   onNavigateToDashboard?: () => void;
+  canDispatch?: boolean;
+  canExport?: boolean;
+  canPrint?: boolean;
+  loggedInUserName?: string;
 }
 
 export const YardInventoryView: React.FC<YardInventoryViewProps> = ({ 
   shipments, 
-  onNavigateToDashboard 
+  onNavigateToDashboard,
+  canDispatch = true,
+  canExport = true,
+  canPrint = true,
+  loggedInUserName,
 }) => {
   // Shipment selection is fixed to all items (the UI selector was removed)
   const [selectedShipment] = useState<string>('الكل');
@@ -169,7 +179,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
 
   // User identity & device identifier for cross-device synchronization
   const [currentUserName, setCurrentUserName] = useState<string>(() => {
-    return localStorage.getItem('atlas_yard_user_name') || 'أمين المستودع (محمد)';
+    return loggedInUserName || localStorage.getItem('atlas_yard_user_name') || 'أمين المستودع (محمد)';
   });
   const [deviceId] = useState<string>(() => {
     let id = localStorage.getItem('atlas_yard_device_id');
@@ -260,6 +270,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
 
   // Controlled input values for the "new dispatch" field of each row
   const [newDispatchInputs, setNewDispatchInputs] = useState<Record<string, string>>({});
+  const [newReturnInputs, setNewReturnInputs] = useState<Record<string, string>>({});
 
   // Client whose movement-history modal is currently open
   const [movementHistoryItem, setMovementHistoryItem] = useState<ShipmentRecord | null>(null);
@@ -804,9 +815,15 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
     if (!isItemTallied(item)) return 0;
     const counted = getCountedQty(item);
     const movements = dispatchMovements[item.id] || [];
-    const movedQty = movements.reduce((sum, m) => sum + (Number(m.quantity) || 0), 0);
+    const movedQty = movements.reduce((sum, m) => {
+      const q = Number(m.quantity) || 0;
+      return m.type === 'return' ? sum - q : sum + q;
+    }, 0);
+    if (movements.length > 0) {
+      return Math.min(counted, Math.max(0, movedQty));
+    }
     const legacyFull = dispatchedItems[item.id]?.dispatched ? counted : 0;
-    return Math.min(counted, Math.max(movedQty, legacyFull));
+    return Math.min(counted, legacyFull);
   };
 
   // Remaining in yard = tallied quantity - dispatched quantity
@@ -817,6 +834,10 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
 
   // Execute a partial dispatch: record the movement and update the remaining balance
   const handlePartialDispatch = (item: ShipmentRecord) => {
+    if (!canDispatch) {
+      setToastMessage('ليست لديك صلاحية إخراج البضائع');
+      return;
+    }
     if (!isItemTallied(item)) {
       setToastMessage(`لا يمكن الإخراج: لم يتم جرد البند ${item.code} فعلياً بعد`);
       return;
@@ -845,7 +866,8 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
       date: dateStr,
       time: timeStr,
       fullDateTime,
-      user: currentUserName
+      user: currentUserName,
+      type: 'dispatch',
     };
 
     const updatedMovements = {
@@ -868,6 +890,84 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
 
     const actionText = `إخراج جزئي (${quantity} طرد) للعميل ${item.code} في [${fullDateTime}] - المتبقي بالساحة: ${newRemaining} طرد`;
     setToastMessage(`تم تنفيذ الإخراج: ${actionText}`);
+    syncItemUpdate(item, actionText, { dispatched: nextState, dispatchMovements: updatedMovements });
+  };
+
+  const handleReturnToYard = (item: ShipmentRecord) => {
+    if (!canDispatch) {
+      setToastMessage('ليست لديك صلاحية إرجاع الطرود');
+      return;
+    }
+    if (!isItemTallied(item)) {
+      setToastMessage(`لا يمكن الإرجاع: لم يتم جرد البند ${item.code} فعلياً بعد`);
+      return;
+    }
+    const raw = (newReturnInputs[item.id] || '').replace(/[^\d]/g, '');
+    const quantity = Number(raw);
+    const dispatchedQty = getDispatchedQty(item);
+
+    if (!raw || quantity <= 0) {
+      setToastMessage(`يرجى إدخال كمية إرجاع صحيحة للعميل ${item.code}`);
+      return;
+    }
+    if (quantity > dispatchedQty) {
+      setToastMessage(`الكمية المطلوبة (${quantity}) أكبر من إجمالي المخرجات (${dispatchedQty}) للعميل ${item.code}`);
+      return;
+    }
+
+    const now = new Date();
+    const timeStr = toLatinDigits(now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    const dateStr = toLatinDigits(now.toISOString().slice(0, 10));
+    const fullDateTime = `${dateStr} ${timeStr}`;
+
+    const existing = dispatchMovements[item.id] || [];
+    const counted = getCountedQty(item);
+    const seedMovements =
+      existing.length === 0 && dispatchedQty > 0
+        ? [
+            {
+              id: 'mv_seed_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+              quantity: dispatchedQty,
+              date: dateStr,
+              time: timeStr,
+              fullDateTime,
+              user: currentUserName,
+              type: 'dispatch' as const,
+            },
+          ]
+        : existing;
+
+    const movement: DispatchMovement = {
+      id: 'mv_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      quantity,
+      date: dateStr,
+      time: timeStr,
+      fullDateTime,
+      user: currentUserName,
+      type: 'return',
+    };
+
+    const updatedMovements = {
+      ...dispatchMovements,
+      [item.id]: [...seedMovements, movement],
+    };
+    const newDispatched = Math.max(0, dispatchedQty - quantity);
+    const newRemaining = Math.max(0, counted - newDispatched);
+
+    setDispatchMovements(updatedMovements);
+    setNewReturnInputs((prev) => ({ ...prev, [item.id]: '' }));
+
+    const nextState: DispatchedInfo = {
+      dispatched: newRemaining === 0,
+      time: timeStr,
+      date: dateStr,
+      fullDateTime,
+      user: currentUserName,
+    };
+    setDispatchedItems((prev) => ({ ...prev, [item.id]: nextState }));
+
+    const actionText = `إرجاع طرود (${quantity} طرد) للعميل ${item.code} في [${fullDateTime}] - المتبقي بالساحة: ${newRemaining} طرد`;
+    setToastMessage(`تم تنفيذ الإرجاع: ${actionText}`);
     syncItemUpdate(item, actionText, { dispatched: nextState, dispatchMovements: updatedMovements });
   };
 
@@ -1111,6 +1211,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
 
   // Batch Action 2: Mark Yard Dispatch for all selected
   const handleBatchMarkDispatch = () => {
+    if (!canDispatch) return;
     const selectedList = filteredItems.filter(it => selectedItemIds[it.id]);
     if (selectedList.length === 0) return;
 
@@ -1792,6 +1893,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                       </button>
 
                       {/* 4. Quick Tally Sheet Print */}
+                      {canPrint && (
                       <button
                         type="button"
                         onClick={() => {
@@ -1810,8 +1912,9 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                           </div>
                         </div>
                       </button>
+                      )}
 
-                      {/* 5. Export Excel */}
+                      {canExport && (
                       <button
                         type="button"
                         onClick={() => {
@@ -1830,6 +1933,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                           </div>
                         </div>
                       </button>
+                      )}
                     </div>
 
                     {/* Section 2: Audit & Real-time Collaboration */}
@@ -2038,6 +2142,8 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                 <th className="py-3 px-3 text-center w-32 bg-slate-700/60 text-amber-300">المتبقي في الساحة</th>
                 <th className="py-3 px-3 text-center w-28 bg-slate-700/60 text-amber-300">الإخراج الجديد</th>
                 <th className="py-3 px-3 text-center w-24 bg-slate-700/60 text-amber-300">تنفيذ الإخراج</th>
+                <th className="py-3 px-3 text-center w-28 bg-rose-900/70 text-rose-200">إرجاع طرود</th>
+                <th className="py-3 px-3 text-center w-24 bg-rose-900/70 text-rose-200">تنفيذ الإرجاع</th>
                 <th className="py-3 px-2 text-center w-14 bg-slate-750" title="سجل تدقيق وتعديلات البند ومراسلة العميل">
                   <span className="inline-flex items-center justify-center gap-1 text-[11px] font-bold text-amber-300">
                     <History className="w-3 h-3 text-amber-400" />
@@ -2059,7 +2165,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
             <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
               {filteredItems.length === 0 ? (
                 <tr>
-                  <td colSpan={19} className="py-16 text-center text-slate-400">
+                  <td colSpan={21} className="py-16 text-center text-slate-400">
                     <div className="max-w-md mx-auto text-center">
                       <Package className="w-10 h-10 mx-auto text-slate-300 mb-3" />
                       <p className="text-sm font-bold text-slate-600">الجدول فارغ، بانتظار ترحيل البضائع من الجرد</p>
@@ -2175,10 +2281,10 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                             const digits = e.target.value.replace(/[^\d]/g, '');
                             setNewDispatchInputs(prev => ({ ...prev, [item.id]: digits }));
                           }}
-                          disabled={remainingQty === 0}
+                          disabled={remainingQty === 0 || !canDispatch}
                           placeholder="0"
                           className="w-20 px-2 py-1.5 text-center font-bold font-mono text-xs bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
-                          title={remainingQty === 0 ? 'تم إخراج كامل الطرود المجرودة' : 'أدخل عدد الطرود المراد إخراجها الآن'}
+                          title={!canDispatch ? 'ليست لديك صلاحية الإخراج' : remainingQty === 0 ? 'تم إخراج كامل الطرود المجرودة' : 'أدخل عدد الطرود المراد إخراجها الآن'}
                         />
                       </td>
 
@@ -2186,10 +2292,12 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                         <button
                           type="button"
                           onClick={() => handlePartialDispatch(item)}
-                          disabled={remainingQty === 0}
+                          disabled={remainingQty === 0 || !canDispatch}
                           className="inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[11px] shadow-xs cursor-pointer transition-all active:scale-95 whitespace-nowrap disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed"
                           title={
-                            remainingQty === 0
+                            !canDispatch
+                              ? 'ليست لديك صلاحية الإخراج'
+                              : remainingQty === 0
                               ? 'تم إخراج كامل الطرود المجرودة'
                               : 'تنفيذ إخراج الكمية المدخلة'
                           }
@@ -2202,6 +2310,41 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                             {dispatchedInfo?.fullDateTime}
                           </div>
                         )}
+                      </td>
+
+                      <td className="py-3 px-3 text-center">
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={newReturnInputs[item.id] || ''}
+                          onChange={(e) => {
+                            const digits = e.target.value.replace(/[^\d]/g, '');
+                            setNewReturnInputs((prev) => ({ ...prev, [item.id]: digits }));
+                          }}
+                          disabled={dispatchedQty === 0 || !canDispatch}
+                          placeholder="0"
+                          className="w-20 px-2 py-1.5 text-center font-bold font-mono text-xs bg-rose-50 border border-rose-300 rounded-lg focus:ring-2 focus:ring-rose-500 focus:border-rose-500 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
+                          title={!canDispatch ? 'ليست لديك صلاحية الإرجاع' : dispatchedQty === 0 ? 'لا توجد مخرجات لإرجاعها' : 'أدخل عدد الطرود المراد إرجاعها للساحة'}
+                        />
+                      </td>
+
+                      <td className="py-3 px-3 text-center">
+                        <button
+                          type="button"
+                          onClick={() => handleReturnToYard(item)}
+                          disabled={dispatchedQty === 0 || !canDispatch}
+                          className="inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-black text-[11px] shadow-xs cursor-pointer transition-all active:scale-95 whitespace-nowrap disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed"
+                          title={
+                            !canDispatch
+                              ? 'ليست لديك صلاحية الإرجاع'
+                              : dispatchedQty === 0
+                              ? 'لا توجد مخرجات لإرجاعها'
+                              : 'تنفيذ إرجاع الكمية المدخلة إلى الساحة'
+                          }
+                        >
+                          <Undo2 className="w-3.5 h-3.5" />
+                          <span>إرجاع</span>
+                        </button>
                       </td>
 
                       {/* Audit Trail Button */}
@@ -2438,6 +2581,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
               {/* Batch Action 1 removed: الجرد الفعلي is read-only here and comes from جرد المستودعات */}
 
               {/* Batch Action 2: تسجيل إخراج الساحة دفعة واحدة */}
+              {canDispatch && (
               <button
                 type="button"
                 onClick={handleBatchMarkDispatch}
@@ -2447,6 +2591,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
                 <Truck className="w-4 h-4" />
                 <span>تسجيل إخراج الساحة ({selectedCount})</span>
               </button>
+              )}
 
               {/* Batch Action 3 removed: entry dates are fixed and read-only in this view */}
 

@@ -1,39 +1,35 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  Package, 
-  FileCheck2, 
-  ClipboardList, 
-  BarChart3,
+import {
   Calendar,
   Ship,
-  PanelLeftClose,
-  PanelLeftOpen,
   RefreshCw,
-  Wallet,
-  Warehouse
+  Menu,
+  LogOut,
+  Moon,
+  Sun,
 } from 'lucide-react';
-import { ActivePage } from '../types';
+import { ActivePage, SystemUser } from '../types';
 import { COMPANY_INFO } from '../data/initialData';
+import { PAGE_LABELS } from '../auth/permissions';
 
 type SyncOutcome = 'changed' | 'unchanged' | 'throttled' | 'error' | 'idle';
 
 interface HeaderProps {
   activePage: ActivePage;
-  setActivePage: (page: ActivePage) => void;
-  isSidebarVisible?: boolean;
-  onToggleSidebar?: () => void;
   onSyncDrive?: () => void;
   isSyncing?: boolean;
   lastSyncTime?: string | null;
-  lastChangeTime?: string | null;
   syncOutcome?: SyncOutcome;
   syncDelta?: { added: number; modified: number; removed: number };
+  onOpenNav?: () => void;
+  onToggleNav?: () => void;
+  isNavOpen?: boolean;
+  darkMode?: boolean;
+  onToggleDarkMode?: () => void;
+  currentUser?: SystemUser | null;
+  onLogout?: () => void;
 }
 
-/**
- * Arabic relative-time label: "قبل X ثانية / دقيقة / ساعة / يوم".
- * Kept dependency-free so it works without pulling in a date library.
- */
 const formatRelativeTime = (iso: string | null | undefined, nowMs: number): string | null => {
   if (!iso) return null;
   const then = new Date(iso).getTime();
@@ -58,15 +54,18 @@ const formatRelativeTime = (iso: string | null | undefined, nowMs: number): stri
 
 export const Header: React.FC<HeaderProps> = ({
   activePage,
-  setActivePage,
-  isSidebarVisible = true,
-  onToggleSidebar,
   onSyncDrive,
   isSyncing = false,
   lastSyncTime,
-  lastChangeTime,
   syncOutcome,
   syncDelta,
+  onOpenNav,
+  onToggleNav,
+  isNavOpen = true,
+  darkMode = false,
+  onToggleDarkMode,
+  currentUser,
+  onLogout,
 }) => {
   const today = new Date().toLocaleDateString('ar-IQ-u-nu-latn', {
     weekday: 'long',
@@ -75,7 +74,6 @@ export const Header: React.FC<HeaderProps> = ({
     day: 'numeric'
   });
 
-  // Re-render every 20s so the "قبل X دقيقة" label stays truthful.
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNowMs(Date.now()), 20_000);
@@ -100,17 +98,26 @@ export const Header: React.FC<HeaderProps> = ({
 
   const deltaTotal = syncDelta ? syncDelta.added + syncDelta.modified + syncDelta.removed : 0;
 
+  const pageTitles = PAGE_LABELS;
+
   return (
     <header className="no-print bg-gradient-to-r from-slate-800 via-slate-800/95 to-slate-750 text-white shadow-lg border-b border-slate-700/50 sticky top-0 z-30">
-      {/* Top Brand Bar */}
       <div className="w-full px-3 sm:px-5 py-2.5 flex flex-col md:flex-row items-center justify-between gap-3">
-        {/* Company Identity */}
         <div className="flex items-center gap-3.5 text-right w-full md:w-auto justify-between md:justify-start">
           <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-amber-500 to-amber-600 flex items-center justify-center shadow-lg shadow-amber-500/20 ring-2 ring-amber-400/30">
+            {onOpenNav && (
+              <button
+                onClick={onOpenNav}
+                className="lg:hidden p-2 rounded-lg bg-slate-700/80 hover:bg-slate-600 text-white transition-colors"
+                aria-label="فتح قائمة التنقل"
+              >
+                <Menu className="w-5 h-5" />
+              </button>
+            )}
+            <div className="lg:hidden w-11 h-11 rounded-xl bg-gradient-to-br from-amber-500 to-amber-600 flex items-center justify-center shadow-lg shadow-amber-500/20 ring-2 ring-amber-400/30">
               <Ship className="w-6 h-6 text-slate-950" />
             </div>
-            <div>
+            <div className="lg:hidden">
               <div className="flex items-center gap-2">
                 <h1 className="text-xl font-bold tracking-tight text-white font-['Cairo']">
                   {COMPANY_INFO.shortNameAr}
@@ -123,6 +130,9 @@ export const Header: React.FC<HeaderProps> = ({
                 {COMPANY_INFO.nameEn}
               </p>
             </div>
+            <h2 className="hidden lg:block text-base font-bold text-white font-['Cairo']">
+              {pageTitles[activePage]}
+            </h2>
           </div>
 
           <div className="md:hidden flex items-center gap-2">
@@ -140,9 +150,7 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        {/* Right Side: Sync Controls & Date Indicator */}
         <div className="flex items-center flex-wrap gap-2.5 w-full md:w-auto justify-end">
-          {/* Direct Live Google Sheets Sync Button */}
           {onSyncDrive && (
             <div className="flex items-center gap-2 bg-slate-900/60 p-1 rounded-xl border border-slate-700/70">
               <button
@@ -152,7 +160,7 @@ export const Header: React.FC<HeaderProps> = ({
                 title="تحديث ومزامنة فورية ومباشرة مع شيت جوجل (Google Sheets)"
               >
                 <RefreshCw className={`w-3.5 h-3.5 stroke-[2.5] ${isSyncing ? 'animate-spin text-slate-950' : ''}`} />
-                <span>{isSyncing ? 'جارٍ مزامنة الشيت...' : '🔄 مزامنة الشيت (Sync)'}</span>
+                <span>{isSyncing ? 'جارٍ مزامنة الشيت...' : 'مزامنة الشيت (Sync)'}</span>
                 <span className="hidden sm:inline-flex items-center gap-1 text-[10px] bg-slate-950/15 px-1.5 py-0.5 rounded font-extrabold text-slate-950">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse"></span>
                   مباشر
@@ -184,99 +192,39 @@ export const Header: React.FC<HeaderProps> = ({
             <Calendar className="w-4 h-4 text-amber-400" />
             <span>{today}</span>
           </div>
-        </div>
-      </div>
 
-      {/* Navigation Tabs Bar */}
-      <div className="bg-slate-800/95 border-t border-slate-700/60 px-3 sm:px-5">
-        <div className="w-full flex items-center justify-between">
-          <nav className="flex items-center gap-1 sm:gap-2 py-1.5 overflow-x-auto">
+          {onToggleNav && (
             <button
-              onClick={() => setActivePage('dashboard')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${
-                activePage === 'dashboard'
-                  ? 'bg-amber-500 text-slate-950 shadow-md font-extrabold'
-                  : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
-              }`}
+              onClick={onToggleNav}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-400 hover:bg-amber-300 text-slate-950 shadow-md cursor-pointer"
+              title={isNavOpen ? 'طي القائمة الجانبية' : 'إظهار القائمة الجانبية'}
             >
-              <Package className="w-4 h-4" />
-              <span>الصفحة الرئيسية والوصولات</span>
+              <Menu className="w-4 h-4" />
+              <span className="hidden sm:inline">طي/إظهار القائمة</span>
             </button>
+          )}
 
+          {onToggleDarkMode && (
             <button
-              onClick={() => setActivePage('warehouse_inventory')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${
-                activePage === 'warehouse_inventory'
-                  ? 'bg-amber-500 text-slate-950 shadow-md font-extrabold'
-                  : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
-              }`}
+              onClick={onToggleDarkMode}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-700 hover:bg-slate-600 text-white cursor-pointer"
+              title={darkMode ? 'الوضع النهاري' : 'الوضع الليلي'}
             >
-              <Warehouse className="w-4 h-4" />
-              <span>جرد المستودعات</span>
+              {darkMode ? <Sun className="w-4 h-4 text-amber-300" /> : <Moon className="w-4 h-4 text-slate-200" />}
+              <span className="hidden sm:inline">{darkMode ? 'الوضع النهاري' : 'الوضع الليلي'}</span>
             </button>
+          )}
 
+          {currentUser && onLogout && (
             <button
-              onClick={() => setActivePage('yard_inventory')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${
-                activePage === 'yard_inventory'
-                  ? 'bg-amber-500 text-slate-950 shadow-md font-extrabold'
-                  : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
-              }`}
+              onClick={onLogout}
+              className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-700/80 hover:bg-rose-700 text-slate-200 hover:text-white transition-colors"
+              title={`تسجيل خروج ${currentUser.name}`}
             >
-              <ClipboardList className="w-4 h-4" />
-              <span>واجهة إخراج البضائع</span>
+              <LogOut className="w-3.5 h-3.5" />
+              <span>خروج</span>
             </button>
-
-            <button
-              onClick={() => setActivePage('debt_collection')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${
-                activePage === 'debt_collection'
-                  ? 'bg-amber-500 text-slate-950 shadow-md font-extrabold'
-                  : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
-              }`}
-            >
-              <Wallet className="w-4 h-4" />
-              <span>واجهة الاستحصالات</span>
-            </button>
-
-            <button
-              onClick={() => setActivePage('reports')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${
-                activePage === 'reports'
-                  ? 'bg-amber-500 text-slate-950 shadow-md font-extrabold'
-                  : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
-              }`}
-            >
-              <BarChart3 className="w-4 h-4" />
-              <span>تقارير</span>
-            </button>
-          </nav>
-
-          <div className="flex items-center gap-2.5 shrink-0 py-1">
-            {activePage === 'dashboard' && onToggleSidebar && (
-              <button
-                onClick={onToggleSidebar}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer select-none ${
-                  isSidebarVisible
-                    ? 'bg-slate-800/95 hover:bg-slate-700 text-amber-300 border border-amber-500/40 hover:border-amber-400'
-                    : 'bg-amber-400 hover:bg-amber-300 text-slate-950 font-black shadow-md shadow-amber-400/20'
-                }`}
-                title={isSidebarVisible ? 'إخفاء الشريط الجانبي لتوسيع الجداول' : 'إظهار الشريط الجانبي والفلاتر'}
-              >
-                {isSidebarVisible ? (
-                  <>
-                    <PanelLeftClose className="w-4 h-4 text-amber-400" />
-                    <span className="hidden sm:inline">إخفاء القائمة الجانبية</span>
-                  </>
-                ) : (
-                  <>
-                    <PanelLeftOpen className="w-4 h-4 stroke-[2.5]" />
-                    <span>إظهار القائمة الجانبية (الفلاتر)</span>
-                  </>
-                )}
-              </button>
-            )}
-          </div>
+          )}
         </div>
       </div>
     </header>

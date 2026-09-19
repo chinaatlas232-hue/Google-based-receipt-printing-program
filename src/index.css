@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @layer utilities {
   @media print {
     .no-print {
@@ -43,4 +45,14 @@
 }
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
+}
+
+/* إخفاء شريط التمرير للقائمة الجانبية وأي حاوية رئيسية */
+.sidebar, .main-content, .page-container, .overflow-y-auto {
+  -ms-overflow-style: none;  /* لمتصفح Internet Explorer و Edge */
+  scrollbar-width: none;  /* لمتصفح Firefox */
+}
+
+.sidebar::-webkit-scrollbar, .main-content::-webkit-scrollbar, .page-container::-webkit-scrollbar, .overflow-y-auto::-webkit-scrollbar {
+  display: none; /* لمتصفحات Chrome و Safari و Opera */
 }
