@@ -5,6 +5,7 @@ import App from './App.tsx';
 import './index.css';
 
 class RootErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; message: string }> {
+  declare props: { children: ReactNode };
   state = { hasError: false, message: '' };
 
   static getDerivedStateFromError(error: Error) {

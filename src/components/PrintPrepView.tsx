@@ -1,5 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Printer, FileSpreadsheet, Users, ClipboardList, X } from 'lucide-react';
+import { COMPANY_INFO } from '../data/initialData';
+import { ATLAS_LOGO_BASE64 } from '../data/logoBase64';
 
 type SheetTab = 'customers' | 'receipts';
 type PaymentMethod = '' | 'نقداً' | 'آجل';
@@ -82,20 +84,69 @@ function lookupCustomer(customers: CustomerRow[], code: string): CustomerRow | n
   return customers.find((row) => row.clientCode.trim().toUpperCase() === key) ?? null;
 }
 
-function parcelThumb(code: string, index: number): string {
-  const hue = (index * 53 + code.length * 17) % 360;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="88" height="88" viewBox="0 0 88 88">
-    <rect width="88" height="88" rx="10" fill="hsl(${hue} 45% 92%)"/>
-    <rect x="16" y="22" width="56" height="44" rx="6" fill="hsl(${hue} 55% 42%)"/>
-    <rect x="16" y="38" width="56" height="8" fill="hsl(${hue} 45% 28%)"/>
-    <text x="44" y="52" text-anchor="middle" font-size="14" font-family="Arial" font-weight="700" fill="#fff">${index + 1}</text>
-  </svg>`;
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+function formatIssueDate(value: string): string {
+  if (!value) return '';
+  const [y, m, d] = value.split('-');
+  if (y && m && d) return `${d}/${m}/${y}`;
+  return value;
 }
 
-function parcelCount(row: { packages: string }): number {
-  const n = Number(row.packages);
-  return Number.isFinite(n) && n > 0 ? Math.min(Math.round(n), 24) : 1;
+function priceUnitLabel(type: string): string {
+  return type.includes('بحري') ? 'السعر للمكعب (CBM):' : 'السعر للكيلو (KG):';
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function openPrintWindow(title: string, bodyHtml: string, pageCss: string) {
+  const printWindow = window.open('', '_blank', 'height=900,width=1200');
+  const html = `<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <title>${escapeHtml(title)}</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+    body { margin: 0; padding: 0; font-family: 'Cairo', Tahoma, Arial, sans-serif; direction: rtl; background: #fff; color: #0f172a; }
+    ${pageCss}
+  </style>
+</head>
+<body>${bodyHtml}</body>
+</html>`;
+  if (printWindow) {
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.focus();
+    window.setTimeout(() => {
+      printWindow.print();
+      printWindow.close();
+    }, 500);
+    return;
+  }
+  const iframe = document.createElement('iframe');
+  iframe.style.position = 'fixed';
+  iframe.style.right = '0';
+  iframe.style.bottom = '0';
+  iframe.style.width = '0';
+  iframe.style.height = '0';
+  iframe.style.border = '0';
+  document.body.appendChild(iframe);
+  const doc = iframe.contentDocument || iframe.contentWindow?.document;
+  if (!doc) return;
+  doc.open();
+  doc.write(html);
+  doc.close();
+  window.setTimeout(() => {
+    iframe.contentWindow?.focus();
+    iframe.contentWindow?.print();
+    iframe.remove();
+  }, 500);
 }
 
 const cellInput =
@@ -116,6 +167,7 @@ export const PrintPrepView: React.FC = () => {
   ]);
   const [tallyOpen, setTallyOpen] = useState(false);
   const [selectedTallyShipment, setSelectedTallyShipment] = useState('');
+  const [selectedReceiptShipment, setSelectedReceiptShipment] = useState('');
 
   const updateCustomer = (id: number, patch: Partial<CustomerRow>) => {
     setCustomers((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)));
@@ -154,13 +206,184 @@ export const PrintPrepView: React.FC = () => {
     return resolvedReceipts.filter((row) => row.shipment.trim().toUpperCase() === code);
   }, [resolvedReceipts, selectedTallyShipment]);
 
+  const printableReceipts = useMemo(
+    () => resolvedReceipts.filter((row) => row.shipment.trim() && row.clientCode.trim()),
+    [resolvedReceipts]
+  );
+
+  const receiptsToPrint = useMemo(() => {
+    const code = selectedReceiptShipment.trim().toUpperCase();
+    if (!code) return printableReceipts;
+    return printableReceipts.filter((row) => row.shipment.trim().toUpperCase() === code);
+  }, [printableReceipts, selectedReceiptShipment]);
+
   const openTally = () => {
     setTallyOpen(true);
   };
 
+  const printReceipts = () => {
+    if (receiptsToPrint.length === 0) return;
+    const pages = receiptsToPrint
+      .map((row) => {
+        const cashMark = row.paymentMethod === 'نقداً' ? '☑' : '☐';
+        const creditMark = row.paymentMethod === 'آجل' ? '☑' : '☐';
+        const issue = formatIssueDate(row.issueDate);
+        return `
+        <section class="receipt-page">
+          <header class="receipt-head">
+            <div class="brand">
+              <img src="${ATLAS_LOGO_BASE64}" alt="logo" />
+              <div>
+                <h1>${escapeHtml(COMPANY_INFO.shortNameAr)}</h1>
+                <p>${escapeHtml(COMPANY_INFO.nameEn)}</p>
+              </div>
+            </div>
+            <div class="title">
+              <h2>وصل تسليم بضاعة</h2>
+              <p>Cargo Delivery Receipt — A5 Landscape</p>
+            </div>
+          </header>
+          <table class="meta">
+            <tr>
+              <td><b>كود العميل:</b> <span class="amber">${escapeHtml(row.clientCode)}</span></td>
+              <td><b>رقم الشحنة:</b> <span class="amber">${escapeHtml(row.shipment)}</span></td>
+              <td><b>تاريخ الإصدار:</b> <span class="amber">${escapeHtml(issue)}</span></td>
+            </tr>
+            <tr>
+              <td><b>اسم العميل:</b> ${escapeHtml(row.clientName || '—')}</td>
+              <td><b>رقم الهاتف:</b> <span dir="ltr">${escapeHtml(row.phone || '—')}</span></td>
+              <td><b>عنوان الاستلام:</b> ${escapeHtml(row.city || '—')}</td>
+            </tr>
+            <tr>
+              <td><b>عدد الطرود:</b> ${escapeHtml(row.packages || '0')} طرد</td>
+              <td><b>الوزن الإجمالي:</b> ${escapeHtml(row.weight || '0')} كغ</td>
+              <td><b>نوع الشحنة:</b> ${escapeHtml(row.type || '—')}</td>
+            </tr>
+            <tr>
+              <td><b>${escapeHtml(priceUnitLabel(row.type))}</b> $${escapeHtml(row.price || '0')}</td>
+              <td colspan="2" class="sales">
+                <b>إجمالي المبيعات / الديون:</b> $${escapeHtml(row.sales || '0')}
+                &nbsp;&nbsp; طريقة الدفع: ${cashMark} نقداً &nbsp; ${creditMark} آجل
+              </td>
+            </tr>
+          </table>
+          <div class="pledge">
+            <b>إقرار الاستلام:</b>
+            أقر أنا الموقع أدناه بأنني استلمت البضاعة والشحنة المذكورة أعلاه كاملة وبحالة سليمة ومطابقة للأوزان والأوصاف المدونة.
+          </div>
+          <div class="signs">
+            <div>اسم المستلم: ........................................<br/>التاريخ: ........................................</div>
+            <div>توقيع وختم المستلم:<br/>........................................</div>
+          </div>
+          <footer>
+            ${escapeHtml(COMPANY_INFO.address)} | <span dir="ltr">${escapeHtml(COMPANY_INFO.phone1)} / ${escapeHtml(COMPANY_INFO.phone2)}</span>
+          </footer>
+        </section>`;
+      })
+      .join('');
+
+    openPrintWindow('وصولات تسليم الشحنة', pages, `
+      @page { size: A5 landscape; margin: 6mm; }
+      .receipt-page {
+        width: 198mm;
+        min-height: 136mm;
+        margin: 0 auto 8mm;
+        padding: 7mm;
+        border: 2px solid #0f172a;
+        border-radius: 4px;
+        page-break-after: always;
+        break-after: page;
+      }
+      .receipt-page:last-child { page-break-after: auto; break-after: auto; }
+      .receipt-head { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #0f172a; padding-bottom: 6px; margin-bottom: 8px; }
+      .brand { display: flex; align-items: center; gap: 8px; }
+      .brand img { width: 42px; height: 42px; object-fit: contain; }
+      .brand h1 { margin: 0; font-size: 14px; }
+      .brand p { margin: 2px 0 0; font-size: 9px; color: #64748b; }
+      .title { text-align: left; }
+      .title h2 { margin: 0; font-size: 16px; color: #b45309; }
+      .title p { margin: 2px 0 0; font-size: 9px; color: #475569; }
+      table.meta { width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 8px; }
+      table.meta td { border: 1px solid #cbd5e1; padding: 5px 7px; width: 33.33%; }
+      table.meta tr:nth-child(odd) td { background: #f8fafc; }
+      .amber { color: #b45309; font-weight: 800; }
+      .sales { background: #fef3c7 !important; }
+      .pledge { background: #fffbeb; border: 1px solid #fde68a; padding: 7px; font-size: 10px; line-height: 1.5; margin-bottom: 10px; }
+      .signs { display: flex; justify-content: space-between; font-size: 11px; font-weight: 700; margin-bottom: 10px; }
+      footer { border-top: 1px dashed #94a3b8; padding-top: 5px; text-align: center; font-size: 9px; color: #475569; }
+      @media print { body { padding: 0; } .receipt-page { margin: 0; width: auto; min-height: auto; } }
+    `);
+
+    const printedIds = new Set(receiptsToPrint.map((row) => row.id));
+    setReceipts((prev) => prev.map((row) => (printedIds.has(row.id) ? { ...row, printed: true } : row)));
+  };
+
   const printTally = () => {
     if (!selectedTallyShipment) return;
-    window.print();
+    const todayStr = new Date().toLocaleDateString('ar-IQ-u-nu-latn', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    const totalPackages = tallyRows.reduce((sum, row) => sum + (Number(row.packages) || 0), 0);
+    const tableRows = tallyRows
+      .map(
+        (row, index) => `
+        <tr>
+          <td style="text-align:center;">${index + 1}</td>
+          <td style="font-weight:800; font-family:monospace;">${escapeHtml(row.clientCode)}</td>
+          <td>
+            <div style="font-weight:800;">${escapeHtml(row.clientName || '—')}</div>
+            <div style="font-size:10px; color:#64748b;">${escapeHtml(row.city || '')}</div>
+          </td>
+          <td style="text-align:center; font-weight:800;">${escapeHtml(row.packages || '0')}</td>
+          <td class="tally-cell"></td>
+        </tr>`
+      )
+      .join('');
+
+    openPrintWindow(`جرد الشحنة ${selectedTallyShipment}`, `
+      <div class="sheet">
+        <div class="header-box">
+          <h2>${escapeHtml(COMPANY_INFO.nameAr)}</h2>
+          <p>ورقة جرد الشحنة واستلام الطرود الفعلي</p>
+        </div>
+        <div class="info-bar">
+          <div>الشحنة: <b>${escapeHtml(selectedTallyShipment)}</b></div>
+          <div>تاريخ الجرد: <b>${todayStr}</b></div>
+          <div>إجمالي الطرود المقيدة: <b>${totalPackages} طرد</b></div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th style="width:6%; text-align:center;">#</th>
+              <th style="width:16%;">كود العميل</th>
+              <th style="width:34%;">العميل والعنوان</th>
+              <th style="width:14%; text-align:center;">عدد الطرود المقيد</th>
+              <th style="width:30%; text-align:center;">الجرد الفعلي بالساحة</th>
+            </tr>
+          </thead>
+          <tbody>${tableRows}</tbody>
+        </table>
+        <div class="footer">
+          <div>اسم مسؤول الساحة / أمين المستودع: ........................................</div>
+          <div>التوقيع والختم: ........................................</div>
+        </div>
+      </div>
+    `, `
+      @page { size: A4 landscape; margin: 8mm; }
+      .sheet { padding: 4mm; }
+      .header-box { text-align: center; border-bottom: 2px solid #0f172a; padding-bottom: 8px; margin-bottom: 10px; }
+      h2 { margin: 0; font-size: 18px; }
+      p { margin: 3px 0 0; font-size: 11px; color: #64748b; }
+      .info-bar { font-size: 12px; font-weight: 700; margin-bottom: 10px; background: #f1f5f9; padding: 8px 12px; border: 1px solid #cbd5e1; display: flex; justify-content: space-between; }
+      table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+      th, td { padding: 8px; border: 1px solid #94a3b8; text-align: right; }
+      th { background: #0f172a !important; color: #fff !important; }
+      tr:nth-child(even) { background: #f8fafc; }
+      .tally-cell { height: 36px; background: #fff !important; }
+      .footer { margin-top: 28px; display: flex; justify-content: space-between; font-size: 12px; font-weight: 700; }
+    `);
   };
 
   return (
@@ -210,6 +433,31 @@ export const PrintPrepView: React.FC = () => {
           <ClipboardList className="w-4 h-4" />
           جرد الشحنة
         </button>
+        {activeSheet === 'receipts' && (
+          <>
+            <select
+              value={selectedReceiptShipment}
+              onChange={(e) => setSelectedReceiptShipment(e.target.value)}
+              className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1e1e1e] text-slate-700 dark:text-slate-200 text-xs font-black px-3 py-2 outline-none min-w-[150px]"
+            >
+              <option value="">كل الشحنات</option>
+              {shipmentOptions.map((code) => (
+                <option key={code} value={code}>
+                  {code}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={printReceipts}
+              disabled={receiptsToPrint.length === 0}
+              className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-black border bg-slate-800 text-amber-300 border-slate-700 hover:bg-slate-700 disabled:opacity-50"
+            >
+              <Printer className="w-4 h-4" />
+              طباعة الوصولات (A5 أفقي)
+            </button>
+          </>
+        )}
       </div>
 
       {activeSheet === 'customers' && (
@@ -454,27 +702,23 @@ export const PrintPrepView: React.FC = () => {
                     <thead className="bg-slate-800 text-white sticky top-0">
                       <tr>
                         <th className="px-3 py-3 text-center text-xs font-extrabold w-14">#</th>
-                        <th className="px-3 py-3 text-center text-xs font-extrabold w-20">تحقق</th>
                         <th className="px-3 py-3 text-xs font-extrabold w-36">كود العميل</th>
                         <th className="px-3 py-3 text-xs font-extrabold">العميل والعنوان</th>
                         <th className="px-3 py-3 text-center text-xs font-extrabold w-36">عدد الطرود المقيد</th>
-                        <th className="px-3 py-3 text-center text-xs font-extrabold">الجرد الفعلي بالساحة / مطابقة الجرد</th>
+                        <th className="px-3 py-3 text-center text-xs font-extrabold">الجرد الفعلي بالساحة</th>
                       </tr>
                     </thead>
                     <tbody>
                       {tallyRows.length === 0 ? (
                         <tr>
-                          <td colSpan={6} className="px-4 py-10 text-center text-xs font-bold text-slate-400">
+                          <td colSpan={5} className="px-4 py-10 text-center text-xs font-bold text-slate-400">
                             لا توجد بنود لهذه الشحنة
                           </td>
                         </tr>
                       ) : (
                         tallyRows.map((row, index) => (
-                          <tr key={row.id} className="border-t border-slate-200 dark:border-slate-700 align-top">
+                          <tr key={row.id} className="border-t border-slate-200 dark:border-slate-700">
                             <td className="px-3 py-3 text-center text-xs font-bold text-slate-500">{index + 1}</td>
-                            <td className="px-3 py-3 text-center">
-                              <span className="inline-block w-4 h-4 border-2 border-slate-700 rounded-sm" />
-                            </td>
                             <td className="px-3 py-3 font-black font-mono">{row.clientCode}</td>
                             <td className="px-3 py-3">
                               <div className="font-extrabold text-slate-800 dark:text-slate-100">{row.clientName}</div>
@@ -482,16 +726,7 @@ export const PrintPrepView: React.FC = () => {
                             </td>
                             <td className="px-3 py-3 text-center font-black tabular-nums">{row.packages}</td>
                             <td className="px-3 py-3">
-                              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2 min-h-[88px]">
-                                {Array.from({ length: parcelCount(row) }, (_, i) => (
-                                  <img
-                                    key={`${row.id}-${i}`}
-                                    src={parcelThumb(row.clientCode || selectedTallyShipment, i)}
-                                    alt={`طرد ${i + 1}`}
-                                    className="w-full h-[72px] object-cover rounded-md border border-slate-200"
-                                  />
-                                ))}
-                              </div>
+                              <div className="min-h-[42px] rounded-md border border-dashed border-slate-300 bg-white dark:bg-slate-900" />
                             </td>
                           </tr>
                         ))

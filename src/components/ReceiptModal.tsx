@@ -54,7 +54,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
         <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap" rel="stylesheet">
         <style>
           @page {
-            size: A5 portrait;
+            size: A5 landscape;
             margin: 6mm;
           }
           * {
@@ -72,7 +72,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
           }
           .receipt-page {
             width: 100%;
-            max-width: 144mm;
+            max-width: 198mm;
             margin: 0 auto;
             padding: 10px;
             border: 2px solid #0f172a;
@@ -140,7 +140,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                 {isBatch ? `معاينة وصولات الدفعة (${shipments.length} وصل)` : `معاينة وصل التسليم: ${shipments[0]?.name}`}
               </h3>
               <p className="text-[11px] text-slate-400">
-                مقاس الطباعة المعتمد: A5 Portrait مع نموذج الإقرار والتوقيع
+                مقاس الطباعة المعتمد: A5 أفقي مع نموذج الإقرار والتوقيع
               </p>
             </div>
           </div>
@@ -151,7 +151,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
               className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-md transition-all active:scale-95"
             >
               <Printer className="w-3.5 h-3.5 stroke-[2.5]" />
-              <span>طباعة الآن (A5)</span>
+              <span>طباعة الآن (A5 أفقي)</span>
             </button>
 
             <button
@@ -168,7 +168,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
           {shipments.map((item, idx) => (
             <div
               key={item.id || idx}
-              className="bg-white rounded-lg shadow-md border-2 border-slate-900 p-4 max-w-[150mm] mx-auto text-slate-900 font-['Cairo'] text-xs"
+              className="bg-white rounded-lg shadow-md border-2 border-slate-900 p-4 max-w-[210mm] mx-auto text-slate-900 font-['Cairo'] text-xs"
             >
               {/* Receipt Header */}
               <div className="border-b-2 border-slate-900 pb-3 mb-3 flex items-center justify-between">
