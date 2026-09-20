@@ -431,7 +431,7 @@ export const FullReportPrintModal: React.FC<FullReportPrintModalProps> = ({
         </div>
 
         {/* Modal Body Preview Content */}
-        <div className="p-5 overflow-y-auto custom-scrollbar flex-1 bg-slate-50 space-y-5">
+        <div className="keep-light p-5 overflow-y-auto custom-scrollbar flex-1 bg-slate-50 space-y-5">
           
           {/* Section 1: KPI Metrics Preview */}
           <div className="bg-white p-4 rounded-xl border border-slate-200/90 shadow-xs">

@@ -168,7 +168,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
           {shipments.map((item, idx) => (
             <div
               key={item.id || idx}
-              className="bg-white rounded-lg shadow-md border-2 border-slate-900 p-4 max-w-[210mm] mx-auto text-slate-900 font-['Cairo'] text-xs"
+              className="keep-light bg-white rounded-lg shadow-md border-2 border-slate-900 p-4 max-w-[210mm] mx-auto text-slate-900 font-['Cairo'] text-xs"
             >
               {/* Receipt Header */}
               <div className="border-b-2 border-slate-900 pb-3 mb-3 flex items-center justify-between">

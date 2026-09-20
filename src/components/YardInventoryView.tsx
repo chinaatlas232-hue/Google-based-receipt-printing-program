@@ -1630,7 +1630,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
   };
 
   return (
-    <div className="space-y-5 font-['Cairo']">
+    <div className="w-full max-w-none space-y-3 font-['Cairo'] overflow-x-hidden">
       {/* Real-time interactive team activity notification banner */}
       {activeAlert && (
         <div className="p-4 bg-gradient-to-r from-amber-600 via-amber-500 to-orange-600 text-white rounded-2xl shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-2 border-amber-300 animate-fade-in ring-4 ring-amber-500/20">
@@ -1704,7 +1704,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
       )}
 
       {/* Top Banner & Main Action Strip */}
-      <div className="bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-slate-200">
+      <div className="w-full max-w-none bg-white rounded-2xl p-3 sm:p-4 shadow-sm border border-slate-200">
         <div className="flex flex-col xl:flex-row items-start xl:items-center justify-between gap-4 pb-4 border-b border-slate-100">
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-xl bg-amber-500/15 text-amber-600 border border-amber-500/30 flex items-center justify-center font-bold shrink-0">
@@ -2032,8 +2032,8 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
       </div>
 
       {/* Main Yard Table */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-        <div className="px-5 py-3.5 bg-slate-800 text-white flex flex-wrap items-center justify-between gap-3">
+      <div className="w-full max-w-none bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+        <div className="px-3 py-3 bg-slate-800 text-white flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <h3 className="text-sm font-bold font-['Cairo']">
               جدول طرود الساحة - الشحنة: [{selectedShipment}]
@@ -2051,7 +2051,7 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
         </div>
 
         {/* Smart Search & Filters Toolbar */}
-        <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center gap-3">
+        <div className="px-3 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center gap-3">
           <div className="relative flex-1 min-w-[220px]">
             <Search className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input
@@ -2121,8 +2121,8 @@ export const YardInventoryView: React.FC<YardInventoryViewProps> = ({
           </span>
         </div>
 
-        <div className="overflow-x-auto custom-scrollbar max-h-[550px]">
-          <table className="w-full text-right text-xs border-collapse">
+        <div className="w-full overflow-x-auto custom-scrollbar min-h-[min(70vh,860px)] max-h-[min(75vh,900px)]">
+          <table className="w-full min-w-full text-right text-xs border-collapse table-auto">
             <thead className="sticky top-0 bg-slate-800 text-white font-bold z-10">
               <tr>
                 {/* Batch Selection Header Checkbox */}

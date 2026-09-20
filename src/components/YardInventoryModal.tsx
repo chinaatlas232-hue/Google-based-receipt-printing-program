@@ -158,7 +158,7 @@ export const YardInventoryModal: React.FC<YardInventoryModalProps> = ({
         </div>
 
         {/* Content Table */}
-        <div className="p-5 overflow-y-auto custom-scrollbar flex-1 bg-slate-50">
+        <div className="keep-light p-5 overflow-y-auto custom-scrollbar flex-1 bg-slate-50">
           <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 flex items-center justify-between text-xs text-amber-900 font-bold">
             <span>عدد البنود للجرد: {shipments.length} عميل</span>
             <span>إجمالي الطرود المقيدة: {totalExpected} طرد</span>

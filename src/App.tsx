@@ -139,9 +139,16 @@ export default function App() {
     return async (force = false) => {
       if (syncInFlightRef.current) return;
       syncInFlightRef.current = true;
+      if (force) {
+        setShipments([]);
+      }
       try {
-        const url = force ? '/api/data?force=true' : '/api/data';
-        const res = await fetch(url);
+        const ts = Date.now();
+        const url = force ? `/api/data?force=true&t=${ts}` : `/api/data?t=${ts}`;
+        const res = await fetch(url, {
+          cache: 'no-store',
+          headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
+        });
         if (res.ok) {
           const json = await res.json();
           if (json.lastSync) setLastSyncTime(json.lastSync);
@@ -149,11 +156,10 @@ export default function App() {
           if (json.outcome) setSyncOutcome(json.outcome);
           if (json.delta) setSyncDelta(json.delta);
 
-          const shouldAdopt = force || json.changed === true || !dataLoadedRef.current;
-          if (json.success && Array.isArray(json.shipments) && json.shipments.length > 0 && shouldAdopt) {
+          if (json.success && Array.isArray(json.shipments)) {
             setShipments(json.shipments);
             dataLoadedRef.current = true;
-            console.log(`[Smart Sync] Adopted ${json.shipments.length} records (changed=${!!json.changed}). Last sync: ${json.lastSync}`);
+            console.log(`[Smart Sync] Replaced with ${json.shipments.length} records (changed=${!!json.changed}). Last sync: ${json.lastSync}`);
           }
         }
       } catch (err) {
@@ -188,20 +194,21 @@ export default function App() {
 
   const handleDirectDriveSync = async () => {
     setIsDriveSyncing(true);
+    setShipments([]);
     setSyncBanner({
       type: 'loading',
       message: 'جارٍ التحقق من التغييرات الجديدة في Google Sheets...'
     });
     try {
-      const res = await fetch('/api/sync-drive', { method: 'POST' });
+      const res = await fetch(`/api/sync-drive?t=${Date.now()}`, {
+        method: 'POST',
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
+      });
       const data = await res.json();
       if (data.success && Array.isArray(data.shipments)) {
-        // The server tells us whether anything actually changed, so an
-        // unchanged sync leaves the current records untouched.
-        if (data.changed || !dataLoadedRef.current) {
-          setShipments(data.shipments);
-          dataLoadedRef.current = true;
-        }
+        setShipments(data.shipments);
+        dataLoadedRef.current = true;
         if (data.lastSync) setLastSyncTime(data.lastSync);
         if (data.lastChange) setLastChangeTime(data.lastChange);
         if (data.outcome) setSyncOutcome(data.outcome);
@@ -582,7 +589,7 @@ export default function App() {
         onLogout={handleLogout}
       />
 
-      <main className="flex-1 w-full px-3 sm:px-4 lg:px-5 py-4">
+      <main className="flex-1 w-full max-w-none px-2 sm:px-3 py-3 overflow-x-hidden">
         {/* Real-time sync status banner */}
         {syncBanner && (
           <div className={`mb-4 p-3 rounded-xl border flex items-center justify-between gap-3 text-xs font-bold shadow-xs transition-all ${
@@ -608,7 +615,7 @@ export default function App() {
         )}
 
         {activePage === 'dashboard' && canAccessPage(currentUser, 'dashboard') && (
-          <div className="w-full space-y-5">
+          <div className="w-full max-w-none space-y-4">
             <MetricCards
               clientCount={totalClients}
               packagesCount={totalPackages}
@@ -731,7 +738,7 @@ export default function App() {
 
       {/* 3. Footer */}
       <footer className="no-print bg-slate-800 text-slate-300 border-t border-slate-700/70 text-xs py-5 px-4 text-center mt-auto">
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2 font-medium">
+        <div className="w-full max-w-none px-2 flex flex-col sm:flex-row items-center justify-between gap-2 font-medium">
           <p>
             نظام وصولات تسليم البضائع والجرد المعتمد © {new Date().getFullYear()} - شركة أطلس المحيط للتجارة العامة والشحن الدولي
           </p>

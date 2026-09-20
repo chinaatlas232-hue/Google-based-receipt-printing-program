@@ -135,7 +135,7 @@ export const ShipmentTable: React.FC<ShipmentTableProps> = ({
   }, [sortedShipments, currentPage, pageSize]);
 
   return (
-    <div className="bg-white rounded-2xl shadow-md border border-slate-200/90 overflow-hidden mb-8">
+    <div className="w-full max-w-none bg-white rounded-2xl shadow-md border border-slate-200/90 overflow-hidden mb-3">
       {/* Table Top Bar */}
       <div className="px-5 py-4 bg-gradient-to-r from-slate-800 to-slate-750 text-white flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
@@ -215,8 +215,8 @@ export const ShipmentTable: React.FC<ShipmentTableProps> = ({
       </div>
 
       {/* Main Table Container */}
-      <div className="overflow-x-auto custom-scrollbar max-h-[600px]">
-        <table className="w-full text-right text-xs border-collapse font-medium">
+      <div className="w-full overflow-x-auto custom-scrollbar max-h-[min(70vh,720px)]">
+        <table className="w-full min-w-full text-right text-xs border-collapse font-medium table-auto">
           <thead className="sticky top-0 z-10 bg-slate-800 text-slate-100 shadow-sm border-b-2 border-slate-700/80 select-none">
             <tr>
               <th className="py-3.5 px-3 text-center w-12 font-bold text-slate-300">#</th>

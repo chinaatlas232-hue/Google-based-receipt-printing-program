@@ -121,7 +121,7 @@ interface RemoteMetadata {
 async function probeRemoteMetadata(fileId: string): Promise<RemoteMetadata | null> {
   const url = `https://docs.google.com/uc?export=download&id=${fileId}&confirm=t`;
   try {
-    const res = await fetch(url, { method: 'HEAD', redirect: 'follow' });
+    const res = await fetch(`${url}&t=${Date.now()}`, { method: 'HEAD', redirect: 'follow', cache: 'no-store' });
     if (!res.ok) return null;
     const len = Number(res.headers.get('content-length'));
     return {
@@ -168,21 +168,26 @@ async function downloadDriveFile(
     }
   }
 
+  const bust = Date.now();
   const urls = [
-    `https://docs.google.com/spreadsheets/d/${fileId}/export?format=xlsx`,
-    `https://docs.google.com/uc?export=download&id=${fileId}&confirm=t`
+    `https://docs.google.com/spreadsheets/d/${fileId}/export?format=xlsx&t=${bust}`,
+    `https://docs.google.com/uc?export=download&id=${fileId}&confirm=t&t=${bust}`
   ];
 
   let sawNotModified = false;
 
   for (const url of urls) {
-    // 2. Conditional GET
-    const headers: Record<string, string> = {};
-    if (state.etag) headers['If-None-Match'] = state.etag;
-    if (state.lastModified) headers['If-Modified-Since'] = state.lastModified;
+    const headers: Record<string, string> = {
+      'Cache-Control': 'no-cache, no-store',
+      Pragma: 'no-cache',
+    };
+    if (allowProbe) {
+      if (state.etag) headers['If-None-Match'] = state.etag;
+      if (state.lastModified) headers['If-Modified-Since'] = state.lastModified;
+    }
 
     try {
-      const res = await fetch(url, { redirect: 'follow', headers });
+      const res = await fetch(url, { redirect: 'follow', headers, cache: 'no-store' });
 
       if (res.status === 304) {
         console.log(`File ${fileId} is unchanged (304 Not Modified), skipping download.`);
@@ -460,8 +465,8 @@ async function syncDriveData(bypassThrottle = false, authoritative = false): Pro
     lastSyncTime = new Date().toISOString();
     if (changed) lastDataChangeTime = lastSyncTime;
 
+    cachedShipments = merged;
     if (changed) {
-      cachedShipments = merged;
       console.log(
         `Google Sheets sync: ${merged.length} records (added ${delta.added}, modified ${delta.modified}, removed ${delta.removed}) at ${lastSyncTime}`
       );
@@ -487,7 +492,9 @@ app.get('/api/data', async (req, res) => {
     // Otherwise this is a throttled check: rapid calls collapse into one and
     // an unchanged remote file costs nothing but a HEAD request.
     const force = req.query.force === 'true';
-    const sync = await syncDriveData(force, false);
+    const sync = await syncDriveData(force, force);
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.set('Pragma', 'no-cache');
     res.json({
       success: true,
       count: cachedShipments.length,
@@ -510,6 +517,8 @@ const handleSync = async (req: express.Request, res: express.Response) => {
   try {
     console.log('User requested manual Google Sheets live synchronization...');
     const result = await syncDriveData(true, true); // manual => bypass throttle, always fetch
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.set('Pragma', 'no-cache');
     const { added, modified, removed } = result.delta;
     const deltaText =
       added || modified || removed

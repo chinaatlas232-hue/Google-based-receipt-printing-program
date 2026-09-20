@@ -17,7 +17,7 @@ export const CitySummaryTable: React.FC<CitySummaryTableProps> = ({ summaries })
   const totalSales = summaries.reduce((acc, s) => acc + s.salesTotal, 0);
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-slate-200/90 overflow-hidden mb-6">
+    <div className="w-full max-w-none bg-white rounded-xl shadow-sm border border-slate-200/90 overflow-hidden mb-4">
       {/* Header */}
       <button
         onClick={() => setIsCollapsed(!isCollapsed)}

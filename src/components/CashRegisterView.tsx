@@ -47,12 +47,12 @@ const STORAGE_KEY = CASH_REGISTER_STORAGE_KEY;
 const COLLECTIONS_STORAGE_KEY = 'atlas_debt_collections_v2';
 const INVENTORY_STORAGE_KEY = 'atlas_cash_inventory_v1';
 const IQD_DENOMS = [50000, 25000, 10000, 5000, 1000] as const;
-const IQD_ROW_COLORS: Record<number, string> = {
-  50000: '#fff1f2',
-  25000: '#f0fdf4',
-  10000: '#f0f9ff',
-  5000: '#fefce8',
-  1000: '#f8fafc',
+const IQD_ROW_CLASSES: Record<number, string> = {
+  50000: 'bg-rose-50',
+  25000: 'bg-emerald-50',
+  10000: 'bg-sky-50',
+  5000: 'bg-amber-50',
+  1000: 'bg-slate-50',
 };
 
 type SafeTab = CashSafeType;
@@ -519,7 +519,7 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
           </div>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          <div className="rounded-2xl border border-emerald-100 p-4 border-t-4 border-t-emerald-400" style={{ backgroundColor: '#ecfdf5' }}>
+          <div className="rounded-2xl border border-emerald-100 p-4 border-t-4 border-t-emerald-400 bg-emerald-50">
             <div className="flex items-center justify-between">
               <p className="text-[11px] font-bold text-emerald-700">المتوفر دولار</p>
               <Banknote className="w-4 h-4 text-emerald-500" />
@@ -536,7 +536,7 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
               <span className="text-sm font-black text-emerald-700">$</span>
             </div>
           </div>
-          <div className="rounded-2xl border border-amber-100 p-4 border-t-4 border-t-amber-400" style={{ backgroundColor: '#fffbeb' }}>
+          <div className="rounded-2xl border border-amber-100 p-4 border-t-4 border-t-amber-400 bg-amber-50">
             <div className="flex items-center justify-between">
               <p className="text-[11px] font-bold text-amber-700">الفرق بالدولار</p>
               <ArrowLeftRight className="w-4 h-4 text-amber-500" />
@@ -545,7 +545,7 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
               $ {usdDifference.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
             </p>
           </div>
-          <div className="rounded-2xl border border-blue-100 p-4 border-t-4 border-t-blue-400" style={{ backgroundColor: '#eff6ff' }}>
+          <div className="rounded-2xl border border-blue-100 p-4 border-t-4 border-t-blue-400 bg-blue-50">
             <div className="flex items-center justify-between">
               <p className="text-[11px] font-bold text-blue-700">سعر الصرف</p>
               <RefreshCw className="w-4 h-4 text-blue-500" />
@@ -559,7 +559,7 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
                 className="mt-1 w-full bg-transparent text-xl font-black text-blue-700 tabular-nums outline-none"
               />
           </div>
-          <div className="rounded-2xl border border-violet-100 p-4 border-t-4 border-t-violet-400" style={{ backgroundColor: '#f5f3ff' }}>
+          <div className="rounded-2xl border border-violet-100 p-4 border-t-4 border-t-violet-400 bg-violet-50">
             <div className="flex items-center justify-between">
               <p className="text-[11px] font-bold text-violet-700">قاصة عراقي</p>
               <Landmark className="w-4 h-4 text-violet-500" />
@@ -591,7 +591,7 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
                 const count = Number(current.counts[denom]) || 0;
                 const rowTotal = denom * count;
                 return (
-                  <tr key={denom} className="border-t border-slate-100 dark:border-slate-700" style={{ backgroundColor: IQD_ROW_COLORS[denom] }}>
+                  <tr key={denom} className={`border-t border-slate-100 dark:border-slate-700 ${IQD_ROW_CLASSES[denom]}`}>
                     <td className="px-4 py-3.5 font-bold text-slate-500 text-base">{index + 1}</td>
                     <td className="px-4 py-3.5 font-black text-slate-800 dark:text-slate-100 tabular-nums text-lg">{formatIqd(denom)} دينار</td>
                     <td className="px-4 py-3.5">

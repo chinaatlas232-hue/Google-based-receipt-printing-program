@@ -374,7 +374,7 @@ export const PrintPrepView: React.FC<PrintPrepViewProps> = ({ shipments }) => {
       )}
 
       {tallyOpen && (
-        <div className="fixed inset-0 z-50 bg-white dark:bg-[#121212] tally-print-root" dir="rtl">
+        <div className="fixed inset-0 z-50 bg-white tally-print-root keep-light" dir="rtl">
           <div className="h-full w-full flex flex-col">
             <div className="px-5 py-3 bg-slate-800 text-white flex flex-wrap items-center justify-between gap-3 no-print">
               <h3 className="text-sm font-extrabold">جرد الشحنة</h3>
@@ -434,16 +434,16 @@ export const PrintPrepView: React.FC<PrintPrepViewProps> = ({ shipments }) => {
                         </tr>
                       ) : (
                         tallyRows.map((row, index) => (
-                          <tr key={row.id || `${row.shipment}-${row.code}-${index}`} className="border-t border-slate-200 dark:border-slate-700">
+                          <tr key={row.id || `${row.shipment}-${row.code}-${index}`} className="border-t border-slate-200">
                             <td className="px-3 py-3 text-center text-xs font-bold text-slate-500">{index + 1}</td>
                             <td className="px-3 py-3 font-black font-mono">{row.code}</td>
                             <td className="px-3 py-3">
-                              <div className="font-extrabold text-slate-800 dark:text-slate-100">{row.name}</div>
+                              <div className="font-extrabold text-slate-800">{row.name}</div>
                               <div className="text-[11px] text-slate-400 mt-0.5">{row.address || row.city}</div>
                             </td>
                             <td className="px-3 py-3 text-center font-black tabular-nums">{row.packages}</td>
                             <td className="px-3 py-3">
-                              <div className="min-h-[42px] rounded-md border border-dashed border-slate-300 bg-white dark:bg-slate-900" />
+                              <div className="min-h-[42px] rounded-md border border-dashed border-slate-300 bg-white" />
                             </td>
                           </tr>
                         ))
