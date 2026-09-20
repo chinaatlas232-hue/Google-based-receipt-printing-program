@@ -1,0 +1,16 @@
+.git
+.gitignore
+.monkeycode-tmp-files
+node_modules
+dist
+coverage
+*.log
+.env
+.env.*
+!.env.example
+bun.lock
+.DS_Store
+*.md
+npm-debug.log*
+.vscode
+.idea
