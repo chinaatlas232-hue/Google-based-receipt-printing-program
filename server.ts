@@ -599,6 +599,40 @@ app.post('/api/collections', (req, res) => {
   }
 });
 
+const containerExpensesPath = path.join(UPLOAD_DIR, 'container_expenses.json');
+let cachedContainerExpenses: Record<string, any> = {};
+
+if (fs.existsSync(containerExpensesPath)) {
+  try {
+    const raw = fs.readFileSync(containerExpensesPath, 'utf8');
+    cachedContainerExpenses = JSON.parse(raw);
+    console.log('[Container Expenses] Loaded cached expenses from disk.');
+  } catch (err) {
+    console.error('Failed to parse container_expenses.json:', err);
+  }
+}
+
+app.get('/api/container-expenses', (_req, res) => {
+  res.json({
+    success: true,
+    expenses: cachedContainerExpenses,
+  });
+});
+
+app.post('/api/container-expenses', (req, res) => {
+  try {
+    const { expenses } = req.body;
+    if (expenses && typeof expenses === 'object') {
+      cachedContainerExpenses = expenses;
+      fs.writeFileSync(containerExpensesPath, JSON.stringify(cachedContainerExpenses, null, 2), 'utf8');
+      return res.json({ success: true, savedAt: cachedContainerExpenses.savedAt ?? new Date().toISOString() });
+    }
+    res.status(400).json({ success: false, error: 'Invalid expenses payload' });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ============================================================================
 // Real-time Yard Inventory Multi-User & Multi-Device Collaboration Engine
 // ============================================================================

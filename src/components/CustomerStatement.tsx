@@ -6,6 +6,7 @@ interface StatementRow {
   id: number;
   date: string;
   ref: string;
+  code: string;
   details: string;
   debit: number;
   credit: number;
@@ -36,12 +37,91 @@ function loadCollections(): Record<string, CollectionRecord> {
   }
 }
 
-function norm(value: string): string {
-  return value.trim().toLowerCase();
+function keyOf(value: string | undefined | null): string {
+  return String(value ?? '')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toUpperCase();
+}
+
+function exactMatch(itemValue: string | undefined | null, selected: string): boolean {
+  if (!selected) return true;
+  return keyOf(itemValue) === keyOf(selected);
+}
+
+function uniqueSorted(values: Array<string | undefined | null>): string[] {
+  const seen = new Set<string>();
+  const next: string[] = [];
+  values.forEach((value) => {
+    const trimmed = String(value ?? '').trim();
+    if (!trimmed) return;
+    const key = keyOf(trimmed);
+    if (seen.has(key)) return;
+    seen.add(key);
+    next.push(trimmed);
+  });
+  return next.sort((a, b) => a.localeCompare(b, 'ar'));
+}
+
+function constrainChoices(list: string[], allowed?: string[]): string[] {
+  if (!allowed?.length) return list;
+  const allow = new Set(allowed.map(keyOf));
+  return list.filter((item) => allow.has(keyOf(item)));
 }
 
 function shipmentDate(_item: ShipmentRecord): string {
   return '';
+}
+
+function buildStatementRows(matched: ShipmentRecord[]): StatementRow[] {
+  const collections = loadCollections();
+  const events: { date: string; ref: string; code: string; details: string; debit: number; credit: number }[] = [];
+
+  matched.forEach((item) => {
+    const recId = item.id || `${item.shipment}_${item.code}`;
+    const saved = collections[recId];
+    const debit = Number(item.sales) || 0;
+    const typeLabel = item.type || (String(item.shipment || '').toUpperCase().startsWith('RA') ? 'جوي' : 'بحري');
+    const code = String(item.code || '').trim();
+    events.push({
+      date: shipmentDate(item) || saved?.lastUpdated?.slice(0, 10) || '—',
+      ref: item.shipment || recId,
+      code,
+      details: `استحقاق شحنة ${typeLabel} — ${item.name || item.code || ''}`.trim(),
+      debit,
+      credit: 0,
+    });
+
+    const payments: PaymentEntry[] = Array.isArray(saved?.payments) ? saved.payments : [];
+    payments.forEach((pay) => {
+      events.push({
+        date: pay.date || saved?.lastUpdated?.slice(0, 10) || '—',
+        ref: pay.receiptNumber || item.shipment || recId,
+        code,
+        details: `تسديد ${pay.paymentMethod}${pay.driverName ? ` — ${pay.driverName}` : ''}${pay.notes ? ` — ${pay.notes}` : ''}`,
+        debit: 0,
+        credit: Number(pay.amount) || 0,
+      });
+    });
+  });
+
+  events.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+
+  let running = 0;
+  return events.map((event, index) => {
+    running += event.debit - event.credit;
+      return {
+        id: index + 1,
+        date: event.date,
+        ref: event.ref,
+        code: event.code,
+        details: event.details,
+        debit: event.debit,
+        credit: event.credit,
+        balance: running,
+      };
+  });
 }
 
 export const CustomerStatement: React.FC<CustomerStatementProps> = ({
@@ -50,31 +130,47 @@ export const CustomerStatement: React.FC<CustomerStatementProps> = ({
   guarantorOptions = [],
   shipmentOptions = [],
 }) => {
-  const [clientCode, setClientCode] = useState('');
-  const [guarantor, setGuarantor] = useState('');
-  const [shipment, setShipment] = useState('');
-
-  const clientCodeChoices = useMemo(() => {
-    if (codeOptions.length) return codeOptions;
-    return Array.from(new Set(shipments.map((s) => s.code).filter(Boolean) as string[])).sort();
-  }, [codeOptions, shipments]);
-
-  const guarantorChoices = useMemo(() => {
-    if (guarantorOptions.length) return guarantorOptions;
-    return Array.from(new Set(shipments.map((s) => s.guarantor).filter(Boolean) as string[])).sort();
-  }, [guarantorOptions, shipments]);
-
-  const shipmentChoices = useMemo(() => {
-    if (shipmentOptions.length) return shipmentOptions;
-    return Array.from(new Set(shipments.map((s) => s.shipment).filter(Boolean) as string[])).sort();
-  }, [shipmentOptions, shipments]);
-
-  const selectClass =
-    'w-full rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-[#121212] px-3 py-2.5 text-sm font-semibold text-slate-800 dark:text-slate-100 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-200';
+  const [filters, setFilters] = useState({ clientCode: '', guarantor: '', shipment: '' });
   const [queried, setQueried] = useState(false);
   const [chartOpen, setChartOpen] = useState(false);
   const [tableOpen, setTableOpen] = useState(false);
-  const [rows, setRows] = useState<StatementRow[]>([]);
+  const { clientCode, guarantor, shipment } = filters;
+
+  const clientCodeChoices = useMemo(() => {
+    const scoped = shipments.filter((item) => exactMatch(item.guarantor, guarantor) && exactMatch(item.shipment, shipment));
+    const list = constrainChoices(uniqueSorted(scoped.map((item) => item.code)), codeOptions);
+    if (clientCode && !list.some((item) => exactMatch(item, clientCode))) return [clientCode, ...list];
+    return list;
+  }, [shipments, guarantor, shipment, codeOptions, clientCode]);
+
+  const guarantorChoices = useMemo(() => {
+    const scoped = shipments.filter((item) => exactMatch(item.code, clientCode) && exactMatch(item.shipment, shipment));
+    const list = constrainChoices(uniqueSorted(scoped.map((item) => item.guarantor)), guarantorOptions);
+    if (guarantor && !list.some((item) => exactMatch(item, guarantor))) return [guarantor, ...list];
+    return list;
+  }, [shipments, clientCode, shipment, guarantorOptions, guarantor]);
+
+  const shipmentChoices = useMemo(() => {
+    const scoped = shipments.filter((item) => exactMatch(item.code, clientCode) && exactMatch(item.guarantor, guarantor));
+    const list = constrainChoices(uniqueSorted(scoped.map((item) => item.shipment)), shipmentOptions);
+    if (shipment && !list.some((item) => exactMatch(item, shipment))) return [shipment, ...list];
+    return list;
+  }, [shipments, clientCode, guarantor, shipmentOptions, shipment]);
+
+  const selectClass =
+    'w-full rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-[#121212] px-3 py-2.5 text-sm font-semibold text-slate-800 dark:text-slate-100 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-200';
+
+  const matchedShipments = useMemo(() => {
+    if (!clientCode && !guarantor && !shipment) return [];
+    return shipments.filter(
+      (item) =>
+        exactMatch(item.code, clientCode) &&
+        exactMatch(item.guarantor, guarantor) &&
+        exactMatch(item.shipment, shipment)
+    );
+  }, [shipments, clientCode, guarantor, shipment]);
+
+  const rows = useMemo(() => buildStatementRows(matchedShipments), [matchedShipments]);
 
   const openingBalance = 0;
   const totalDebit = useMemo(() => rows.reduce((sum, row) => sum + row.debit, 0), [rows]);
@@ -82,77 +178,73 @@ export const CustomerStatement: React.FC<CustomerStatementProps> = ({
   const finalBalance = openingBalance + totalDebit - totalCredit;
   const maxBar = Math.max(totalDebit, totalCredit, 1);
 
-  const handleSearch = (e?: React.FormEvent) => {
-    e?.preventDefault();
-    const codeQ = norm(clientCode);
-    const guarantorQ = norm(guarantor);
-    const shipmentQ = norm(shipment);
-
-    if (!codeQ && !guarantorQ && !shipmentQ) {
-      setRows([]);
-      setQueried(true);
-      return;
-    }
-
-    const matched = shipments.filter((item) => {
-      const matchCode = !codeQ || norm(item.code || '').includes(codeQ);
-      const matchGuarantor = !guarantorQ || norm(item.guarantor || '').includes(guarantorQ);
-      const matchShipment = !shipmentQ || norm(item.shipment || '').includes(shipmentQ);
-      return matchCode && matchGuarantor && matchShipment;
-    });
-
-    const collections = loadCollections();
-    const events: { date: string; ref: string; details: string; debit: number; credit: number }[] = [];
-
-    matched.forEach((item) => {
-      const recId = item.id || `${item.shipment}_${item.code}`;
-      const saved = collections[recId];
-      const debit = Number(item.sales) || 0;
-      const typeLabel = item.type || (String(item.shipment || '').toUpperCase().startsWith('RA') ? 'جوي' : 'بحري');
-      events.push({
-        date: shipmentDate(item) || saved?.lastUpdated?.slice(0, 10) || '—',
-        ref: item.shipment || recId,
-        details: `استحقاق شحنة ${typeLabel} — ${item.name || item.code || ''}`.trim(),
-        debit,
-        credit: 0,
-      });
-
-      const payments: PaymentEntry[] = Array.isArray(saved?.payments) ? saved.payments : [];
-      payments.forEach((pay) => {
-        events.push({
-          date: pay.date || saved?.lastUpdated?.slice(0, 10) || '—',
-          ref: pay.receiptNumber || item.shipment || recId,
-          details: `تسديد ${pay.paymentMethod}${pay.driverName ? ` — ${pay.driverName}` : ''}${pay.notes ? ` — ${pay.notes}` : ''}`,
-          debit: 0,
-          credit: Number(pay.amount) || 0,
-        });
-      });
-    });
-
-    events.sort((a, b) => String(a.date).localeCompare(String(b.date)));
-
-    let running = openingBalance;
-    const nextRows: StatementRow[] = events.map((event, index) => {
-      running += event.debit - event.credit;
-      return {
-        id: index + 1,
-        date: event.date,
-        ref: event.ref,
-        details: event.details,
-        debit: event.debit,
-        credit: event.credit,
-        balance: running,
-      };
-    });
-
-    setRows(nextRows);
+  const revealResults = () => {
     setQueried(true);
     setTableOpen(true);
     setChartOpen(true);
   };
 
+  const applyClientCode = (value: string) => {
+    if (!value) {
+      setFilters({ clientCode: '', guarantor: '', shipment: '' });
+      revealResults();
+      return;
+    }
+    const related = shipments.filter((item) => exactMatch(item.code, value));
+    const linkedGuarantors = uniqueSorted(related.map((item) => item.guarantor));
+    setFilters({
+      clientCode: value,
+      guarantor: linkedGuarantors.length === 1 ? linkedGuarantors[0] : '',
+      shipment: '',
+    });
+    revealResults();
+  };
+
+  const applyGuarantor = (value: string) => {
+    if (!value) {
+      setFilters((prev) => ({ ...prev, guarantor: '', shipment: '' }));
+      revealResults();
+      return;
+    }
+    const related = shipments.filter((item) => exactMatch(item.guarantor, value));
+    const linkedCodes = uniqueSorted(related.map((item) => item.code));
+    setFilters((prev) => ({
+      clientCode: prev.clientCode && linkedCodes.some((item) => exactMatch(item, prev.clientCode))
+        ? prev.clientCode
+        : '',
+      guarantor: value,
+      shipment: '',
+    }));
+    revealResults();
+  };
+
+  const applyShipment = (value: string) => {
+    if (!value) {
+      setFilters((prev) => ({ ...prev, shipment: '' }));
+      revealResults();
+      return;
+    }
+    const related = shipments.filter((item) => exactMatch(item.shipment, value));
+    const linkedCodes = uniqueSorted(related.map((item) => item.code));
+    const linkedGuarantors = uniqueSorted(related.map((item) => item.guarantor));
+    setFilters((prev) => ({
+      clientCode: prev.clientCode && linkedCodes.some((item) => exactMatch(item, prev.clientCode))
+        ? prev.clientCode
+        : '',
+      guarantor: prev.guarantor && linkedGuarantors.some((item) => exactMatch(item, prev.guarantor))
+        ? prev.guarantor
+        : '',
+      shipment: value,
+    }));
+    revealResults();
+  };
+
+  const handleSearch = (e?: React.FormEvent) => {
+    e?.preventDefault();
+    revealResults();
+  };
+
   const handlePrint = () => {
-    setChartOpen(true);
     setTableOpen(true);
     window.setTimeout(() => window.print(), 50);
   };
@@ -161,14 +253,21 @@ export const CustomerStatement: React.FC<CustomerStatementProps> = ({
     <div className="w-full space-y-5 customer-statement-print" dir="rtl">
       <style>{`
         @media print {
-          @page { size: A4; margin: 12mm; }
-          body { background: #fff !important; }
-          aside, header, footer, nav, .no-print, button { display: none !important; }
+          @page { size: A4 landscape; margin: 8mm; }
+          html, body {
+            background: #fff !important;
+            width: 100% !important;
+            height: auto !important;
+          }
+          aside, header, footer, nav, .no-print, button,
+          .statement-filters, .statement-chart {
+            display: none !important;
+          }
           .customer-statement-print {
             display: block !important;
             width: 100% !important;
-            max-width: 210mm !important;
-            margin: 0 auto !important;
+            max-width: none !important;
+            margin: 0 !important;
             padding: 0 !important;
             background: #fff !important;
             color: #000 !important;
@@ -179,12 +278,45 @@ export const CustomerStatement: React.FC<CustomerStatementProps> = ({
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
           }
-          .print-only-open { display: block !important; }
-          table { width: 100% !important; font-size: 11px !important; }
+          .statement-header {
+            margin-bottom: 10px !important;
+            padding: 10px 14px !important;
+            border-radius: 8px !important;
+          }
+          .statement-header h2 { font-size: 16px !important; }
+          .statement-header p { font-size: 11px !important; color: #e2e8f0 !important; }
+          .statement-summary {
+            display: grid !important;
+            grid-template-columns: repeat(4, 1fr) !important;
+            gap: 8px !important;
+            width: 100% !important;
+            margin: 0 0 10px !important;
+          }
+          .statement-summary > div {
+            break-inside: avoid !important;
+            padding: 10px 12px !important;
+            border-radius: 8px !important;
+          }
+          .statement-summary p:first-child { font-size: 10px !important; }
+          .statement-summary p:last-child { font-size: 16px !important; }
+          .statement-table-wrap,
+          .statement-table-wrap.print-only-open {
+            display: block !important;
+            width: 100% !important;
+            overflow: visible !important;
+          }
+          .statement-table-card { border-radius: 8px !important; }
+          .statement-table-title {
+            display: flex !important;
+            width: 100% !important;
+            padding: 8px 12px !important;
+          }
+          table { width: 100% !important; font-size: 11px !important; border-collapse: collapse !important; }
+          th, td { padding: 6px 8px !important; }
         }
       `}</style>
 
-      <div className="bg-gradient-to-r from-slate-800 to-slate-750 text-white rounded-2xl shadow-md border border-slate-700/60 px-5 py-4 flex items-center gap-3">
+      <div className="statement-header bg-gradient-to-r from-slate-800 to-slate-750 text-white rounded-2xl shadow-md border border-slate-700/60 px-5 py-4 flex items-center gap-3">
         <div className="w-11 h-11 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/40 flex items-center justify-center">
           <User className="w-6 h-6" />
         </div>
@@ -196,14 +328,14 @@ export const CustomerStatement: React.FC<CustomerStatementProps> = ({
 
       <form
         onSubmit={handleSearch}
-        className="bg-white dark:bg-[#1e1e1e] rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm p-4 sm:p-5 grid grid-cols-1 md:grid-cols-5 gap-3"
+        className="statement-filters bg-white dark:bg-[#1e1e1e] rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm p-4 sm:p-5 grid grid-cols-1 md:grid-cols-5 gap-3"
       >
         <div>
           <label className="mb-1.5 flex items-center gap-1 text-[11px] font-bold text-slate-700 dark:text-slate-300">
             <Search className="w-3.5 h-3.5 text-amber-500" />
             كود العميل
           </label>
-          <select value={clientCode} onChange={(e) => setClientCode(e.target.value)} className={selectClass}>
+          <select value={clientCode} onChange={(e) => applyClientCode(e.target.value)} className={selectClass}>
             <option value="">الكل</option>
             {clientCodeChoices.map((opt) => (
               <option key={opt} value={opt}>
@@ -217,7 +349,7 @@ export const CustomerStatement: React.FC<CustomerStatementProps> = ({
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
             الكفيل
           </label>
-          <select value={guarantor} onChange={(e) => setGuarantor(e.target.value)} className={selectClass}>
+          <select value={guarantor} onChange={(e) => applyGuarantor(e.target.value)} className={selectClass}>
             <option value="">الكل</option>
             {guarantorChoices.map((opt) => (
               <option key={opt} value={opt}>
@@ -231,7 +363,7 @@ export const CustomerStatement: React.FC<CustomerStatementProps> = ({
             <Truck className="w-3.5 h-3.5 text-blue-500" />
             رقم الشحنة
           </label>
-          <select value={shipment} onChange={(e) => setShipment(e.target.value)} className={selectClass}>
+          <select value={shipment} onChange={(e) => applyShipment(e.target.value)} className={selectClass}>
             <option value="">الكل</option>
             {shipmentChoices.map((opt) => (
               <option key={opt} value={opt}>
@@ -262,7 +394,7 @@ export const CustomerStatement: React.FC<CustomerStatementProps> = ({
 
       {queried && (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="statement-summary grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="bg-white dark:bg-[#1e1e1e] rounded-2xl border border-slate-200 dark:border-slate-700 p-4">
               <p className="text-xs font-bold text-slate-500 dark:text-slate-400">الرصيد الافتتاحي</p>
               <p className="text-2xl font-black text-slate-800 dark:text-slate-100 mt-1 tabular-nums">
@@ -289,7 +421,7 @@ export const CustomerStatement: React.FC<CustomerStatementProps> = ({
             </div>
           </div>
 
-          <div className="bg-white dark:bg-[#1e1e1e] rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+          <div className="statement-chart bg-white dark:bg-[#1e1e1e] rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
             <button
               type="button"
               onClick={() => setChartOpen((v) => !v)}
@@ -323,11 +455,11 @@ export const CustomerStatement: React.FC<CustomerStatementProps> = ({
             </div>
           </div>
 
-          <div className="bg-white dark:bg-[#1e1e1e] rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+          <div className="statement-table-card bg-white dark:bg-[#1e1e1e] rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
             <button
               type="button"
               onClick={() => setTableOpen((v) => !v)}
-              className="w-full px-5 py-3 bg-slate-800 text-white flex items-center justify-between no-print"
+              className="statement-table-title w-full px-5 py-3 bg-slate-800 text-white flex items-center justify-between no-print"
             >
               <h3 className="text-sm font-extrabold">كشف الحساب — {clientCode || shipment || guarantor || 'بدون كود'}</h3>
               <div className="flex items-center gap-3">
@@ -335,13 +467,14 @@ export const CustomerStatement: React.FC<CustomerStatementProps> = ({
                 <ChevronDown className={`w-4 h-4 text-slate-300 transition-transform ${tableOpen ? 'rotate-180' : ''}`} />
               </div>
             </button>
-            <div className={`${tableOpen ? 'block' : 'hidden'} print-only-open overflow-x-auto`}>
+            <div className={`statement-table-wrap ${tableOpen ? 'block' : 'hidden'} print-only-open overflow-x-auto`}>
               <table className="w-full text-sm text-right">
                 <thead className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs">
                   <tr>
                     <th className="px-4 py-3 font-extrabold">التسلسل</th>
                     <th className="px-4 py-3 font-extrabold">التاريخ</th>
                     <th className="px-4 py-3 font-extrabold">رقم الشحنة / الوصل</th>
+                    <th className="px-4 py-3 font-extrabold">الكود</th>
                     <th className="px-4 py-3 font-extrabold">البيان / التفاصيل</th>
                     <th className="px-4 py-3 font-extrabold">مدين (عليه)</th>
                     <th className="px-4 py-3 font-extrabold">دائن (له)</th>
@@ -351,7 +484,7 @@ export const CustomerStatement: React.FC<CustomerStatementProps> = ({
                 <tbody>
                   {rows.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-4 py-10 text-center text-slate-400 font-bold text-xs">
+                      <td colSpan={8} className="px-4 py-10 text-center text-slate-400 font-bold text-xs">
                         لا توجد حركات مطابقة للبحث.
                       </td>
                     </tr>
@@ -366,6 +499,7 @@ export const CustomerStatement: React.FC<CustomerStatementProps> = ({
                           {row.date}
                         </td>
                         <td className="px-4 py-3 font-black text-slate-800 dark:text-slate-100">{row.ref}</td>
+                        <td className="px-4 py-3 font-black text-amber-700 dark:text-amber-400 font-mono">{row.code || '—'}</td>
                         <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{row.details}</td>
                         <td className="px-4 py-3 font-black text-rose-600 tabular-nums">
                           {row.debit ? `${money(row.debit)}$` : '-'}

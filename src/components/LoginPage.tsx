@@ -22,7 +22,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
     }
     const ok = onLogin(userValue, passValue);
     if (!ok) {
-      setError('اسم المستخدم أو كلمة المرور غير صحيحة. استخدم admin و 123');
+        setError('اسم المستخدم أو كلمة المرور غير صحيحة');
     }
   };
 

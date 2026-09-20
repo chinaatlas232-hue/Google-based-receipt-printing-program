@@ -15,7 +15,7 @@ import { AddShipmentModal } from './components/AddShipmentModal';
 import { DriveSyncModal } from './components/DriveSyncModal';
 import { YardInventoryView } from './components/YardInventoryView';
 import { WarehouseInventory } from './components/WarehouseInventory';
-import { ShipmentReportsView } from './components/ShipmentReportsView';
+import { ReportsView } from './components/ReportsView';
 import { DebtCollectionView } from './components/DebtCollectionView';
 import { UserPermissionsView } from './components/UserPermissionsView';
 import { CashRegisterView } from './components/CashRegisterView';
@@ -24,6 +24,9 @@ import { ContainerRadar } from './components/ContainerRadar';
 import { WarehouseYardInventory } from './components/WarehouseYardInventory';
 import { PrintPrepView } from './components/PrintPrepView';
 import { DebtAgingView } from './components/DebtAgingView';
+import { VisitLogView } from './components/VisitLogView';
+import { ExpensesView } from './components/ExpensesView';
+import { LoginPage } from './components/LoginPage';
 import { exportShipmentsToExcel, exportYardInventoryToExcel } from './utils/excel';
 import { auth } from './services/firebaseAuth';
 import {
@@ -39,12 +42,15 @@ import {
 } from './auth/permissions';
 
 const USERS_STORAGE_KEY = 'atlas_system_users_v5';
+const AUTH_SESSION_KEY = 'atlas_auth_session_v1';
+const UNIFIED_PASSWORD = '123';
 
 function hydrateUsers(stored?: SystemUser[]): SystemUser[] {
   const byUsername = new Map<string, SystemUser>();
   defaultUsers.forEach((user) => {
     byUsername.set(user.username.toLowerCase(), {
       ...user,
+      password: UNIFIED_PASSWORD,
       permissions: normalizePermissions(user.permissions),
     });
   });
@@ -56,6 +62,7 @@ function hydrateUsers(stored?: SystemUser[]): SystemUser[] {
       ...(current ?? user),
       ...user,
       username: current?.username ?? String(user.username).trim(),
+      password: UNIFIED_PASSWORD,
       permissions: normalizePermissions(user.permissions ?? current?.permissions),
     });
   });
@@ -78,14 +85,18 @@ export default function App() {
     return hydrateUsers();
   });
 
-  const currentUser = useMemo(
-    () =>
-      users.find((u) => u.username === 'admin') ??
-      users.find((u) => u.role === 'مدير النظام') ??
-      users[0] ??
-      defaultUsers[0],
-    [users]
-  );
+  const [sessionUsername, setSessionUsername] = useState<string | null>(() => {
+    try {
+      return sessionStorage.getItem(AUTH_SESSION_KEY);
+    } catch {
+      return null;
+    }
+  });
+
+  const currentUser = useMemo(() => {
+    if (!sessionUsername) return null;
+    return users.find((u) => u.username.toLowerCase() === sessionUsername.toLowerCase()) ?? null;
+  }, [users, sessionUsername]);
 
   // 1. Data State (with local persistence for seamless editing)
   const [shipments, setShipments] = useState<ShipmentRecord[]>(() => {
@@ -272,7 +283,32 @@ export default function App() {
   const [filters, setFilters] = useState<FilterState>(() => defaultFiltersForUser(currentUser));
 
   const handleSaveUser = (updated: SystemUser) => {
-    setUsers((prev) => prev.map((u) => (u.id === updated.id ? updated : u)));
+    setUsers((prev) => prev.map((u) => (u.id === updated.id ? { ...updated, password: UNIFIED_PASSWORD } : u)));
+  };
+
+  const handleLogin = (username: string, password: string): boolean => {
+    const matched = users.find((u) => u.username.toLowerCase() === username.trim().toLowerCase());
+    if (!matched || matched.password !== password.trim()) return false;
+    setSessionUsername(matched.username);
+    try {
+      sessionStorage.setItem(AUTH_SESSION_KEY, matched.username);
+    } catch {
+      /* ignore */
+    }
+    setActivePage(firstAccessiblePage(matched));
+    setFilters(defaultFiltersForUser(matched));
+    return true;
+  };
+
+  const handleLogout = () => {
+    setSessionUsername(null);
+    try {
+      sessionStorage.removeItem(AUTH_SESSION_KEY);
+    } catch {
+      /* ignore */
+    }
+    setActivePage('dashboard');
+    setFilters(defaultFiltersForUser(null));
   };
 
   // 4. Modal States
@@ -504,6 +540,10 @@ export default function App() {
   const allowExportExcel = canDoAction(currentUser, 'export_excel');
   const allowExportYard = canDoAction(currentUser, 'export_yard_excel');
 
+  if (!currentUser) {
+    return <LoginPage onLogin={handleLogin} />;
+  }
+
   return (
     <div className="min-h-screen bg-slate-100/70 text-slate-900 dark:bg-[#121212] dark:text-slate-100 font-['Cairo'] flex selection:bg-amber-100 selection:text-amber-900">
       <NavSidebar
@@ -512,6 +552,7 @@ export default function App() {
         isOpen={isNavOpen}
         onClose={() => setIsNavOpen(false)}
         currentUser={currentUser}
+        onLogout={handleLogout}
         filters={filters}
         setFilters={applyFilters}
         shipmentOptions={shipmentOptions}
@@ -538,6 +579,7 @@ export default function App() {
         darkMode={darkMode}
         onToggleDarkMode={() => setDarkMode((prev) => !prev)}
         currentUser={currentUser}
+        onLogout={handleLogout}
       />
 
       <main className="flex-1 w-full px-3 sm:px-4 lg:px-5 py-4">
@@ -612,7 +654,7 @@ export default function App() {
         )}
 
         {activePage === 'reports' && canAccessPage(currentUser, 'reports') && (
-          <ShipmentReportsView 
+          <ReportsView 
             shipments={scopedShipments} 
             onSyncDrive={allowSync ? handleDirectDriveSync : undefined} 
             isSyncing={isDriveSyncing} 
@@ -656,7 +698,7 @@ export default function App() {
         )}
 
         {activePage === 'print_prep' && (
-          <PrintPrepView />
+          <PrintPrepView shipments={scopedShipments} />
         )}
 
         {activePage === 'debt_aging' && (
@@ -666,6 +708,14 @@ export default function App() {
             guarantorOptions={guarantorOptions}
             codeOptions={codeOptions}
           />
+        )}
+
+        {activePage === 'visit_log' && (
+          <VisitLogView />
+        )}
+
+        {activePage === 'expenses' && (
+          <ExpensesView />
         )}
 
         {activePage === 'user_permissions' && canAccessPage(currentUser, 'user_permissions') && (

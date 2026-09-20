@@ -49,6 +49,8 @@ export type ActivePage =
   | 'warehouse_yard'
   | 'print_prep'
   | 'debt_aging'
+  | 'visit_log'
+  | 'expenses'
   | 'user_permissions';
 
 export type CashSafeType = 'air' | 'sea';

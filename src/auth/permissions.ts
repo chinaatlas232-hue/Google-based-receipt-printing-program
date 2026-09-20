@@ -22,6 +22,8 @@ export const PAGE_KEYS: ActivePage[] = [
   'warehouse_yard',
   'print_prep',
   'debt_aging',
+  'visit_log',
+  'expenses',
   'user_permissions',
 ];
 
@@ -37,6 +39,8 @@ export const PAGE_LABELS: Record<ActivePage, string> = {
   warehouse_yard: 'جرد المستودع والساحة',
   print_prep: 'التحظير الطباعي',
   debt_aging: 'أعمار الديون والديون المتأخرة',
+  visit_log: 'سجل الزيارات',
+  expenses: 'المصاريف',
   user_permissions: 'صلاحيات المستخدمين',
 };
 
@@ -114,6 +118,8 @@ export function createFullPermissions(): UserPermissions {
       warehouse_yard: 'edit',
       print_prep: 'edit',
       debt_aging: 'edit',
+      visit_log: 'edit',
+      expenses: 'edit',
       user_permissions: 'edit',
     },
     filters: {
@@ -172,7 +178,11 @@ export function normalizePermissions(source?: UserPermissions): UserPermissions 
                 ? 'none'
                 : key === 'debt_aging'
                   ? source.pages?.debt_collection ?? 'none'
-                  : 'none');
+                  : key === 'visit_log'
+                    ? 'none'
+                    : key === 'expenses'
+                      ? 'none'
+                      : 'none');
   });
   FILTER_KEYS.forEach((key) => {
     const value = source.filters?.[key];
@@ -222,7 +232,7 @@ type DeepPartialPermissions = {
 
 export function canAccessPage(user: SystemUser | null, page: ActivePage): boolean {
   if (!user) return false;
-  if (page === 'customer_statement' || page === 'container_radar' || page === 'warehouse_yard' || page === 'print_prep' || page === 'debt_aging') return true;
+  if (page === 'customer_statement' || page === 'container_radar' || page === 'warehouse_yard' || page === 'print_prep' || page === 'debt_aging' || page === 'visit_log' || page === 'expenses') return true;
   return user.permissions.pages[page] !== 'none';
 }
 

@@ -65,6 +65,7 @@ interface FinanceDetail {
   evidence: string;
   evidenceName: string;
   payDate: string;
+  notes: string;
 }
 
 interface SafeInventory {
@@ -110,6 +111,15 @@ function formatAmount(value: number): string {
 
 function formatIqd(value: number): string {
   return value.toLocaleString('en-US');
+}
+
+function parseMoneyAmount(value: string | number | null | undefined): number {
+  const latin = toLatinDigits(String(value ?? '')).trim();
+  if (!latin) return 0;
+  const cleaned = latin.replace(/,/g, '').replace(/[^\d.]/g, '');
+  if (!cleaned) return 0;
+  const numeric = Number(cleaned);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
 }
 
 function loadStoredTransactions(): CashTransaction[] {
@@ -222,7 +232,9 @@ function loadInventory(): InventoryState {
       ...emptyInventory(),
       ...side,
       counts: { ...emptyInventory().counts, ...(side?.counts ?? {}) },
-      details: Array.isArray(side?.details) ? side.details : [],
+      details: Array.isArray(side?.details)
+        ? side.details.map((row) => ({ ...row, notes: row.notes || '' }))
+        : [],
     });
     return { air: merge(parsed.air), sea: merge(parsed.sea) };
   } catch {
@@ -239,6 +251,7 @@ function emptyDetail(): FinanceDetail {
     evidence: '',
     evidenceName: '',
     payDate: '',
+    notes: '',
   };
 }
 
@@ -251,6 +264,7 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
   const [inventory, setInventory] = useState<InventoryState>(loadInventory);
   const [draftDetail, setDraftDetail] = useState<FinanceDetail>(emptyDetail);
   const [financeCardOpen, setFinanceCardOpen] = useState(false);
+  const [currencyTableOpen, setCurrencyTableOpen] = useState(true);
   const [editingDetailId, setEditingDetailId] = useState<string | null>(null);
 
   const refreshTransactions = () => setTransactions(loadTransactions());
@@ -290,12 +304,13 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
   );
 
   const current = inventory[activeTab];
+  const paidOut = current.details.reduce((sum, row) => sum + parseMoneyAmount(row.amount), 0);
   const iqdTotal = IQD_DENOMS.reduce((sum, denom) => sum + denom * (Number(current.counts[denom]) || 0), 0);
-  const remaining = totals[activeTab] - (Number(current.paidOut) || 0);
-  const otherUsd = Number(current.otherUsd) || 0;
-  const exchangeRate = Number(current.exchangeRate) || 0;
+  const remaining = totals[activeTab] - paidOut;
+  const otherUsd = parseMoneyAmount(current.otherUsd);
+  const exchangeRate = parseMoneyAmount(current.exchangeRate);
   const usdDifference = remaining - otherUsd;
-  const iraqiSafe = usdDifference * exchangeRate;
+  const iraqiSafe = Math.max(0, usdDifference) * exchangeRate;
   const tallyDifference = iqdTotal - iraqiSafe;
   const isAir = activeTab === 'air';
 
@@ -331,39 +346,28 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
     reader.readAsDataURL(file);
   };
 
-  const parseUsdAmount = (value: string): number => {
-    const numeric = Number(toLatinDigits(value).replace(/[^\d.]/g, ''));
-    return Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
-  };
-
   const handleSaveDraft = () => {
     if (!canEdit) return;
     const amount = toLatinDigits(draftDetail.amount).trim();
     const recipient = draftDetail.recipient.trim();
     const formNo = draftDetail.formNo.trim();
-    if (!amount && !recipient && !formNo && !draftDetail.evidence && !draftDetail.payDate) return;
-    const spent = parseUsdAmount(amount);
+    const notes = draftDetail.notes.trim();
+    if (!amount && !recipient && !formNo && !draftDetail.evidence && !draftDetail.payDate && !notes) return;
     const nextRow: FinanceDetail = {
       ...draftDetail,
       id: editingDetailId || `fin_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       amount,
       recipient,
       formNo,
+      notes,
     };
-
-    if (editingDetailId) {
-      const previous = current.details.find((item) => item.id === editingDetailId);
-      const previousSpent = parseUsdAmount(previous?.amount || '');
-      updateCurrent({
-        paidOut: Math.max(0, (Number(current.paidOut) || 0) - previousSpent + spent),
-        details: current.details.map((item) => (item.id === editingDetailId ? nextRow : item)),
-      });
-    } else {
-      updateCurrent({
-        paidOut: (Number(current.paidOut) || 0) + spent,
-        details: [nextRow, ...current.details],
-      });
-    }
+    const nextDetails = editingDetailId
+      ? current.details.map((item) => (item.id === editingDetailId ? nextRow : item))
+      : [nextRow, ...current.details];
+    updateCurrent({
+      details: nextDetails,
+      paidOut: nextDetails.reduce((sum, row) => sum + parseMoneyAmount(row.amount), 0),
+    });
     resetDraft();
     setFinanceCardOpen(false);
   };
@@ -371,18 +375,17 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
   const handleEditDetail = (row: FinanceDetail) => {
     if (!canEdit) return;
     setEditingDetailId(row.id);
-    setDraftDetail({ ...row });
+    setDraftDetail({ ...row, notes: row.notes || '' });
     setFinanceCardOpen(true);
   };
 
   const handleRemoveDetail = (id: string) => {
     if (!canEdit) return;
-    const row = current.details.find((item) => item.id === id);
-    const spent = parseUsdAmount(row?.amount || '');
     if (editingDetailId === id) resetDraft();
+    const nextDetails = current.details.filter((item) => item.id !== id);
     updateCurrent({
-      paidOut: Math.max(0, (Number(current.paidOut) || 0) - spent),
-      details: current.details.filter((item) => item.id !== id),
+      details: nextDetails,
+      paidOut: nextDetails.reduce((sum, item) => sum + parseMoneyAmount(item.amount), 0),
     });
   };
 
@@ -391,13 +394,14 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
     row.amount || '-',
     row.recipient || '-',
     row.formNo || '-',
+    row.notes || '-',
     row.evidenceName || (row.evidence ? 'مرفق' : '-'),
     row.payDate || '-',
   ]);
 
   const exportFinanceExcel = () => {
     const sheet = XLSX.utils.aoa_to_sheet([
-      ['تسلسل', 'المبلغ', 'اسم المستلم', 'رقم الفورم', 'الدليل', 'تاريخ التسديد'],
+      ['تسلسل', 'المبلغ', 'اسم المستلم', 'رقم الفورم', 'الملاحظات', 'الدليل', 'تاريخ التسديد'],
       ...financeExportRows,
     ]);
     const wb = XLSX.utils.book_new();
@@ -428,6 +432,7 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
     const rtlHead = [
       toRtlPdfText('تاريخ التسديد'),
       toRtlPdfText('الدليل'),
+      toRtlPdfText('الملاحظات'),
       toRtlPdfText('رقم الفورم'),
       toRtlPdfText('اسم المستلم'),
       toRtlPdfText('المبلغ'),
@@ -506,18 +511,11 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
           </div>
           <div className="bg-white dark:bg-[#1e1e1e] rounded-2xl border border-slate-200 dark:border-slate-700 p-4 border-t-4 border-t-rose-500">
             <p className="text-[11px] font-bold text-slate-500 dark:text-slate-400">دفع من القاصة</p>
-            <input
-              value={current.paidOut || ''}
-              onChange={(e) => updateCurrent({ paidOut: Number(toLatinDigits(e.target.value).replace(/[^\d.]/g, '')) || 0 })}
-              disabled={!canEdit}
-              inputMode="decimal"
-              placeholder="0"
-              className="mt-1 w-full bg-transparent text-xl font-black text-rose-700 tabular-nums outline-none"
-            />
+            <p className="text-xl font-black text-rose-700 mt-1 tabular-nums">{formatAmount(paidOut)}</p>
           </div>
           <div className="bg-white dark:bg-[#1e1e1e] rounded-2xl border border-slate-200 dark:border-slate-700 p-4 border-t-4 border-t-amber-500">
             <p className="text-[11px] font-bold text-slate-500 dark:text-slate-400">متبقي رصيد</p>
-            <p className="text-xl font-black text-amber-700 mt-1 tabular-nums">{formatAmount(remaining)}</p>
+            <p className={`text-xl font-black mt-1 tabular-nums ${remaining < 0 ? 'text-rose-700' : 'text-amber-700'}`}>{formatAmount(remaining)}</p>
           </div>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -528,8 +526,8 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
             </div>
             <div className="mt-1 flex items-center gap-1">
               <input
-                value={current.otherUsd || ''}
-                onChange={(e) => updateCurrent({ otherUsd: Number(toLatinDigits(e.target.value).replace(/[^\d.]/g, '')) || 0 })}
+                value={current.otherUsd ? String(current.otherUsd) : ''}
+                onChange={(e) => updateCurrent({ otherUsd: parseMoneyAmount(e.target.value) })}
                 disabled={!canEdit}
                 inputMode="decimal"
                 placeholder="0"
@@ -552,14 +550,14 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
               <p className="text-[11px] font-bold text-blue-700">سعر الصرف</p>
               <RefreshCw className="w-4 h-4 text-blue-500" />
             </div>
-            <input
-              value={current.exchangeRate || ''}
-              onChange={(e) => updateCurrent({ exchangeRate: Number(toLatinDigits(e.target.value).replace(/[^\d.]/g, '')) || 0 })}
-              disabled={!canEdit}
-              inputMode="decimal"
-              placeholder="0"
-              className="mt-1 w-full bg-transparent text-xl font-black text-blue-700 tabular-nums outline-none"
-            />
+              <input
+                value={current.exchangeRate ? String(current.exchangeRate) : ''}
+                onChange={(e) => updateCurrent({ exchangeRate: parseMoneyAmount(e.target.value) })}
+                disabled={!canEdit}
+                inputMode="decimal"
+                placeholder="0"
+                className="mt-1 w-full bg-transparent text-xl font-black text-blue-700 tabular-nums outline-none"
+              />
           </div>
           <div className="rounded-2xl border border-violet-100 p-4 border-t-4 border-t-violet-400" style={{ backgroundColor: '#f5f3ff' }}>
             <div className="flex items-center justify-between">
@@ -574,15 +572,15 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
       </div>
 
       <div className="bg-white dark:bg-[#1e1e1e] rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-        <div className={`px-5 py-3 text-white flex items-center justify-between ${isAir ? 'bg-blue-700' : 'bg-emerald-700'}`}>
-          <h3 className="text-sm font-extrabold">جرد الفئات النقدية (دينار عراقي) — {isAir ? 'جوي' : 'بحري'}</h3>
-          <span className="text-[11px] font-bold">المجموع: {formatIqd(iqdTotal)}</span>
+        <div className="px-5 py-3 text-white flex items-center justify-between bg-[#1e3a5f]">
+          <h3 className="text-base font-extrabold">جرد الفئات النقدية (دينار عراقي) — {isAir ? 'جوي' : 'بحري'}</h3>
+          <span className="text-sm font-bold">المجموع: {formatIqd(iqdTotal)}</span>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm text-right">
-            <thead className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs">
+          <table className="w-full text-base text-right">
+            <thead className="bg-[#1e3a5f] text-white text-sm">
               <tr>
-                <th className="px-4 py-3 font-extrabold">no</th>
+                <th className="px-4 py-3 font-extrabold">#</th>
                 <th className="px-4 py-3 font-extrabold">الفئة</th>
                 <th className="px-4 py-3 font-extrabold">العدد</th>
                 <th className="px-4 py-3 font-extrabold">المجموع</th>
@@ -594,32 +592,32 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
                 const rowTotal = denom * count;
                 return (
                   <tr key={denom} className="border-t border-slate-100 dark:border-slate-700" style={{ backgroundColor: IQD_ROW_COLORS[denom] }}>
-                    <td className="px-4 py-3 font-bold text-slate-500">{index + 1}</td>
-                    <td className="px-4 py-3 font-black text-slate-800 dark:text-slate-100 tabular-nums">{formatIqd(denom)} دينار</td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3.5 font-bold text-slate-500 text-base">{index + 1}</td>
+                    <td className="px-4 py-3.5 font-black text-slate-800 dark:text-slate-100 tabular-nums text-lg">{formatIqd(denom)} دينار</td>
+                    <td className="px-4 py-3.5">
                       <input
                         value={count || ''}
                         onChange={(e) => handleCountChange(denom, e.target.value)}
                         disabled={!canEdit}
                         inputMode="numeric"
                         placeholder="0"
-                        className="w-24 rounded-lg border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-[#121212] px-2 py-1.5 text-center font-black text-sm outline-none focus:border-amber-500"
+                        className="w-28 rounded-lg border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-[#121212] px-2 py-2 text-center font-black text-lg outline-none focus:border-amber-500"
                       />
                     </td>
-                    <td className="px-4 py-3 font-black text-slate-900 dark:text-slate-100 tabular-nums">{formatIqd(rowTotal)}</td>
+                    <td className="px-4 py-3.5 font-black text-slate-900 dark:text-slate-100 tabular-nums text-lg">{formatIqd(rowTotal)}</td>
                   </tr>
                 );
               })}
               <tr className="border-t-2 border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-800/60">
-                <td className="px-4 py-3 font-extrabold" colSpan={2}>المجموع</td>
-                <td className="px-4 py-3 font-black tabular-nums">
+                <td className="px-4 py-3.5 font-extrabold text-base" colSpan={2}>المجموع</td>
+                <td className="px-4 py-3.5 font-black tabular-nums text-lg">
                   {IQD_DENOMS.reduce((sum, denom) => sum + (Number(current.counts[denom]) || 0), 0)}
                 </td>
-                <td className="px-4 py-3 font-black tabular-nums">{formatIqd(iqdTotal)}</td>
+                <td className="px-4 py-3.5 font-black tabular-nums text-lg">{formatIqd(iqdTotal)}</td>
               </tr>
               <tr className={tallyDifference > 0 ? 'bg-emerald-50' : tallyDifference < 0 ? 'bg-rose-50' : 'bg-slate-50'}>
-                <td className={`px-4 py-3 font-extrabold ${tallyDifference > 0 ? 'text-emerald-800' : tallyDifference < 0 ? 'text-rose-800' : 'text-slate-700'}`} colSpan={3}>الفرق</td>
-                <td className={`px-4 py-3 font-black tabular-nums ${tallyDifference > 0 ? 'text-emerald-800' : tallyDifference < 0 ? 'text-rose-800' : 'text-slate-700'}`}>
+                <td className={`px-4 py-3.5 font-extrabold text-base ${tallyDifference > 0 ? 'text-emerald-800' : tallyDifference < 0 ? 'text-rose-800' : 'text-slate-700'}`} colSpan={3}>الفرق</td>
+                <td className={`px-4 py-3.5 font-black tabular-nums text-lg ${tallyDifference > 0 ? 'text-emerald-800' : tallyDifference < 0 ? 'text-rose-800' : 'text-slate-700'}`}>
                   {tallyDifference === 0
                     ? 'مطابق'
                     : `${formatIqd(Math.abs(tallyDifference))} ${tallyDifference > 0 ? 'زيادة' : 'نقص'}`}
@@ -677,6 +675,16 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
                 value={draftDetail.payDate}
                 onChange={(e) => handleDraftChange('payDate', e.target.value)}
                 className="rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-[#121212] px-3 py-2.5 text-sm font-semibold text-slate-800 dark:text-slate-100 outline-none focus:border-amber-500"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-[11px] font-extrabold text-slate-500 md:col-span-2">
+              الملاحظات
+              <textarea
+                value={draftDetail.notes}
+                onChange={(e) => handleDraftChange('notes', e.target.value)}
+                placeholder="أدخل الملاحظات"
+                rows={2}
+                className="rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-[#121212] px-3 py-2.5 text-sm font-semibold text-slate-800 dark:text-slate-100 outline-none focus:border-amber-500 resize-y"
               />
             </label>
             <label className="flex flex-col gap-1 text-[11px] font-extrabold text-slate-500 md:col-span-2">
@@ -742,12 +750,13 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm text-right">
-            <thead className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs">
+            <thead className="bg-[#1e3a5f] text-white text-xs">
               <tr>
                 <th className="px-3 py-3 font-extrabold">#</th>
                 <th className="px-3 py-3 font-extrabold">المبلغ</th>
                 <th className="px-3 py-3 font-extrabold">اسم المستلم</th>
                 <th className="px-3 py-3 font-extrabold">رقم الفورم</th>
+                <th className="px-3 py-3 font-extrabold">الملاحظات</th>
                 <th className="px-3 py-3 font-extrabold">الدليل</th>
                 <th className="px-3 py-3 font-extrabold">تاريخ التسديد</th>
                 {canEdit && <th className="px-3 py-3 font-extrabold">إجراءات</th>}
@@ -756,7 +765,7 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
             <tbody>
               {current.details.length === 0 ? (
                 <tr>
-                  <td colSpan={canEdit ? 7 : 6} className="px-4 py-10 text-center text-slate-400 font-bold text-xs">
+                  <td colSpan={canEdit ? 8 : 7} className="px-4 py-10 text-center text-slate-400 font-bold text-xs">
                     لا توجد تفاصيل مالية لهذه القاصة.
                   </td>
                 </tr>
@@ -767,6 +776,7 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
                     <td className="px-3 py-2 font-black tabular-nums">{row.amount || '-'}</td>
                     <td className="px-3 py-2 font-semibold">{row.recipient || '-'}</td>
                     <td className="px-3 py-2 font-semibold">{row.formNo || '-'}</td>
+                    <td className="px-3 py-2 font-semibold max-w-[220px]">{row.notes || '-'}</td>
                     <td className="px-3 py-2">
                       {row.evidence ? (
                         <a href={row.evidence} target="_blank" rel="noreferrer" className="text-[11px] font-bold text-blue-600 truncate">
@@ -806,9 +816,18 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
       </div>
 
       <div className="bg-white dark:bg-[#1e1e1e] rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setCurrencyTableOpen((open) => !open)}
+          className="w-full px-5 py-3 bg-[#1e3a5f] text-white flex items-center justify-between"
+        >
+          <h3 className="text-sm font-extrabold">جدول العملات / حركات الاستحصال</h3>
+          {currencyTableOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+        </button>
+        {currencyTableOpen && (
         <div className="overflow-x-auto">
           <table className="w-full text-sm text-right">
-            <thead className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200">
+            <thead className="bg-[#1e3a5f] text-white">
               <tr>
                 <th className="px-4 py-3 font-extrabold">#</th>
                 <th className="px-4 py-3 font-extrabold">رقم الشحنة</th>
@@ -847,6 +866,7 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
             </tbody>
           </table>
         </div>
+        )}
       </div>
     </div>
   );

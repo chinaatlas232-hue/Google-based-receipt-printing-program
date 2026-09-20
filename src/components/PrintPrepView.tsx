@@ -1,98 +1,45 @@
 import React, { useMemo, useState } from 'react';
-import { Printer, FileSpreadsheet, Users, ClipboardList, X } from 'lucide-react';
+import { Printer, FileSpreadsheet, ClipboardList, X } from 'lucide-react';
+import { ShipmentRecord } from '../types';
 import { COMPANY_INFO } from '../data/initialData';
 import { ATLAS_LOGO_BASE64 } from '../data/logoBase64';
 
-type SheetTab = 'customers' | 'receipts';
-type PaymentMethod = '' | 'نقداً' | 'آجل';
-type ShipmentKind = '' | 'جوي' | 'بحري';
+type SheetTab = 'receipts' | 'tally';
 
-interface CustomerRow {
-  id: number;
-  clientCode: string;
-  clientName: string;
-  phone: string;
-  city: string;
+interface PrintPrepViewProps {
+  shipments: ShipmentRecord[];
 }
 
-interface ReceiptPrintRow {
-  id: number;
-  shipment: string;
-  clientCode: string;
-  packages: string;
-  weight: string;
-  type: ShipmentKind;
-  price: string;
-  sales: string;
-  issueDate: string;
-  paymentMethod: PaymentMethod;
-  printed: boolean;
+function keyOf(value: string | undefined | null): string {
+  return String(value ?? '')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toUpperCase();
 }
 
-const DUMMY_CUSTOMERS: CustomerRow[] = [
-  { id: 1, clientCode: 'B449', clientName: 'علي ولي', phone: '+964 7715391754', city: 'أربيل' },
-  { id: 2, clientCode: 'B102', clientName: 'محمد كريم', phone: '+964 7501122334', city: 'بغداد' },
-  { id: 3, clientCode: 'B210', clientName: 'سارة أحمد', phone: '+964 7709988776', city: 'البصرة' },
-  { id: 4, clientCode: 'B318', clientName: 'حسين علي', phone: '+964 7512233445', city: 'كركوك' },
-  { id: 5, clientCode: 'B427', clientName: 'نور فاضل', phone: '+964 7723344556', city: 'الموصل' },
-  { id: 6, clientCode: 'B533', clientName: 'ياسين جبار', phone: '+964 7734455667', city: 'النجف' },
-  { id: 7, clientCode: 'B641', clientName: 'زينب عباس', phone: '+964 7745566778', city: 'كربلاء' },
-  { id: 8, clientCode: 'B754', clientName: 'أحمد صالح', phone: '+964 7756677889', city: 'السليمانية' },
-  { id: 9, clientCode: 'B866', clientName: 'ليلى حسن', phone: '+964 7767788990', city: 'دهوك' },
-  { id: 10, clientCode: 'B970', clientName: 'كاظم مهدي', phone: '+964 7778899001', city: 'الناصرية' },
-];
-
-const RECEIPT_COLUMNS = [
-  'رقم الشحنة',
-  'كود العميل',
-  'اسم العميل (آلي)',
-  'رقم الهاتف (آلي)',
-  'عنوان الاستلام / المدينة (آلي)',
-  'عدد الطرود',
-  'الوزن الإجمالي (كغ)',
-  'نوع الشحنة',
-  'سعر الكيلو ($)',
-  'إجمالي المبيعات / الديون ($)',
-  'تاريخ الإصدار',
-  'طريقة الدفع',
-  'حالة الطباعة',
-] as const;
-
-function emptyReceiptRow(id: number): ReceiptPrintRow {
-  return {
-    id,
-    shipment: '',
-    clientCode: '',
-    packages: '',
-    weight: '',
-    type: '',
-    price: '',
-    sales: '',
-    issueDate: '',
-    paymentMethod: '',
-    printed: false,
-  };
-}
-
-function emptyCustomerRow(id: number): CustomerRow {
-  return { id, clientCode: '', clientName: '', phone: '', city: '' };
-}
-
-function lookupCustomer(customers: CustomerRow[], code: string): CustomerRow | null {
-  const key = code.trim().toUpperCase();
-  if (!key) return null;
-  return customers.find((row) => row.clientCode.trim().toUpperCase() === key) ?? null;
-}
-
-function formatIssueDate(value: string): string {
-  if (!value) return '';
-  const [y, m, d] = value.split('-');
-  if (y && m && d) return `${d}/${m}/${y}`;
-  return value;
+function uniqueShipmentCodes(shipments: ShipmentRecord[]): string[] {
+  const seen = new Set<string>();
+  const next: string[] = [];
+  shipments.forEach((item) => {
+    const raw = String(item.shipment ?? '').trim();
+    if (!raw) return;
+    const key = keyOf(raw);
+    if (seen.has(key)) return;
+    seen.add(key);
+    next.push(raw);
+  });
+  return next.sort((a, b) => a.localeCompare(b, 'ar'));
 }
 
 function priceUnitLabel(type: string): string {
-  return type.includes('بحري') ? 'السعر للمكعب (CBM):' : 'السعر للكيلو (KG):';
+  return type.includes('بحري') || type.toLowerCase().includes('sea')
+    ? 'السعر للمكعب (CBM):'
+    : 'السعر للكيلو (KG):';
+}
+
+function money(value: number): string {
+  return value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function escapeHtml(value: string): string {
@@ -149,85 +96,40 @@ function openPrintWindow(title: string, bodyHtml: string, pageCss: string) {
   }, 500);
 }
 
-const cellInput =
-  'w-full min-w-[110px] bg-transparent px-2 py-1.5 text-xs font-semibold text-slate-800 dark:text-slate-100 outline-none';
-const autoCell =
-  'px-3 py-2 text-xs font-bold text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800/50 min-w-[120px]';
+function todayStr(): string {
+  return new Date().toLocaleDateString('ar-IQ-u-nu-latn', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+}
 
-export const PrintPrepView: React.FC = () => {
-  const [activeSheet, setActiveSheet] = useState<SheetTab>('customers');
-  const [customers, setCustomers] = useState<CustomerRow[]>(DUMMY_CUSTOMERS);
-  const [receipts, setReceipts] = useState<ReceiptPrintRow[]>(() => [
-    { ...emptyReceiptRow(1), shipment: 'RA6003', clientCode: 'B449', packages: '1', weight: '43.4', type: 'جوي', price: '9', sales: '390.60', issueDate: '2026-08-26', paymentMethod: 'آجل' },
-    { ...emptyReceiptRow(2), shipment: 'RA6003', clientCode: 'B102', packages: '3', weight: '88.2', type: 'جوي', price: '9', sales: '793.80', issueDate: '2026-08-26', paymentMethod: 'نقداً' },
-    { ...emptyReceiptRow(3), shipment: 'RA6003', clientCode: 'B210', packages: '2', weight: '51.0', type: 'جوي', price: '9', sales: '459.00', issueDate: '2026-08-26', paymentMethod: 'آجل' },
-    { ...emptyReceiptRow(4), shipment: 'RQ6042', clientCode: 'B318', packages: '6', weight: '210.5', type: 'بحري', price: '4', sales: '842.00', issueDate: '2026-08-20', paymentMethod: 'نقداً' },
-    { ...emptyReceiptRow(5), shipment: 'RQ6042', clientCode: 'B427', packages: '4', weight: '140.0', type: 'بحري', price: '4', sales: '560.00', issueDate: '2026-08-20', paymentMethod: 'آجل' },
-    ...Array.from({ length: 7 }, (_, i) => emptyReceiptRow(i + 6)),
-  ]);
+export const PrintPrepView: React.FC<PrintPrepViewProps> = ({ shipments }) => {
+  const [activeSheet, setActiveSheet] = useState<SheetTab>('receipts');
+  const [selectedReceiptShipment, setSelectedReceiptShipment] = useState('');
   const [tallyOpen, setTallyOpen] = useState(false);
   const [selectedTallyShipment, setSelectedTallyShipment] = useState('');
-  const [selectedReceiptShipment, setSelectedReceiptShipment] = useState('');
 
-  const updateCustomer = (id: number, patch: Partial<CustomerRow>) => {
-    setCustomers((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)));
-  };
-
-  const updateReceipt = (id: number, patch: Partial<ReceiptPrintRow>) => {
-    setReceipts((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)));
-  };
-
-  const resolvedReceipts = useMemo(
-    () =>
-      receipts.map((row) => {
-        const found = lookupCustomer(customers, row.clientCode);
-        return {
-          ...row,
-          clientName: found?.clientName ?? '',
-          phone: found?.phone ?? '',
-          city: found?.city ?? '',
-        };
-      }),
-    [customers, receipts]
-  );
-
-  const shipmentOptions = useMemo(() => {
-    const codes = new Set<string>();
-    resolvedReceipts.forEach((row) => {
-      const code = row.shipment.trim().toUpperCase();
-      if (code) codes.add(code);
-    });
-    return Array.from(codes);
-  }, [resolvedReceipts]);
-
-  const tallyRows = useMemo(() => {
-    const code = selectedTallyShipment.trim().toUpperCase();
-    if (!code) return [];
-    return resolvedReceipts.filter((row) => row.shipment.trim().toUpperCase() === code);
-  }, [resolvedReceipts, selectedTallyShipment]);
-
-  const printableReceipts = useMemo(
-    () => resolvedReceipts.filter((row) => row.shipment.trim() && row.clientCode.trim()),
-    [resolvedReceipts]
-  );
+  const shipmentOptions = useMemo(() => uniqueShipmentCodes(shipments), [shipments]);
 
   const receiptsToPrint = useMemo(() => {
-    const code = selectedReceiptShipment.trim().toUpperCase();
-    if (!code) return printableReceipts;
-    return printableReceipts.filter((row) => row.shipment.trim().toUpperCase() === code);
-  }, [printableReceipts, selectedReceiptShipment]);
+    const code = keyOf(selectedReceiptShipment);
+    if (!code) return [];
+    return shipments.filter((item) => keyOf(item.shipment) === code);
+  }, [shipments, selectedReceiptShipment]);
 
-  const openTally = () => {
-    setTallyOpen(true);
-  };
+  const tallyRows = useMemo(() => {
+    const code = keyOf(selectedTallyShipment);
+    if (!code) return [];
+    return shipments.filter((item) => keyOf(item.shipment) === code);
+  }, [shipments, selectedTallyShipment]);
 
   const printReceipts = () => {
     if (receiptsToPrint.length === 0) return;
+    const issue = todayStr();
     const pages = receiptsToPrint
       .map((row) => {
-        const cashMark = row.paymentMethod === 'نقداً' ? '☑' : '☐';
-        const creditMark = row.paymentMethod === 'آجل' ? '☑' : '☐';
-        const issue = formatIssueDate(row.issueDate);
+        const type = String(row.type || '');
         return `
         <section class="receipt-page">
           <header class="receipt-head">
@@ -245,25 +147,25 @@ export const PrintPrepView: React.FC = () => {
           </header>
           <table class="meta">
             <tr>
-              <td><b>كود العميل:</b> <span class="amber">${escapeHtml(row.clientCode)}</span></td>
-              <td><b>رقم الشحنة:</b> <span class="amber">${escapeHtml(row.shipment)}</span></td>
+              <td><b>كود العميل:</b> <span class="amber">${escapeHtml(row.code || '—')}</span></td>
+              <td><b>رقم الشحنة:</b> <span class="amber">${escapeHtml(row.shipment || '—')}</span></td>
               <td><b>تاريخ الإصدار:</b> <span class="amber">${escapeHtml(issue)}</span></td>
             </tr>
             <tr>
-              <td><b>اسم العميل:</b> ${escapeHtml(row.clientName || '—')}</td>
+              <td><b>اسم العميل:</b> ${escapeHtml(row.name || '—')}</td>
               <td><b>رقم الهاتف:</b> <span dir="ltr">${escapeHtml(row.phone || '—')}</span></td>
-              <td><b>عنوان الاستلام:</b> ${escapeHtml(row.city || '—')}</td>
+              <td><b>عنوان الاستلام:</b> ${escapeHtml(row.address || row.city || '—')}</td>
             </tr>
             <tr>
-              <td><b>عدد الطرود:</b> ${escapeHtml(row.packages || '0')} طرد</td>
-              <td><b>الوزن الإجمالي:</b> ${escapeHtml(row.weight || '0')} كغ</td>
-              <td><b>نوع الشحنة:</b> ${escapeHtml(row.type || '—')}</td>
+              <td><b>عدد الطرود:</b> ${escapeHtml(String(row.packages || 0))} طرد</td>
+              <td><b>الوزن الإجمالي:</b> ${escapeHtml(String(row.weight || 0))} كغ</td>
+              <td><b>نوع الشحنة:</b> ${escapeHtml(type || '—')}</td>
             </tr>
             <tr>
-              <td><b>${escapeHtml(priceUnitLabel(row.type))}</b> $${escapeHtml(row.price || '0')}</td>
+              <td><b>${escapeHtml(priceUnitLabel(type))}</b> $${escapeHtml(money(Number(row.price) || 0))}</td>
               <td colspan="2" class="sales">
-                <b>إجمالي المبيعات / الديون:</b> $${escapeHtml(row.sales || '0')}
-                &nbsp;&nbsp; طريقة الدفع: ${cashMark} نقداً &nbsp; ${creditMark} آجل
+                <b>إجمالي المبيعات / الديون:</b> $${escapeHtml(money(Number(row.sales) || 0))}
+                &nbsp;&nbsp; طريقة الدفع: ☐ نقداً &nbsp; ☐ آجل
               </td>
             </tr>
           </table>
@@ -313,30 +215,22 @@ export const PrintPrepView: React.FC = () => {
       footer { border-top: 1px dashed #94a3b8; padding-top: 5px; text-align: center; font-size: 9px; color: #475569; }
       @media print { body { padding: 0; } .receipt-page { margin: 0; width: auto; min-height: auto; } }
     `);
-
-    const printedIds = new Set(receiptsToPrint.map((row) => row.id));
-    setReceipts((prev) => prev.map((row) => (printedIds.has(row.id) ? { ...row, printed: true } : row)));
   };
 
   const printTally = () => {
     if (!selectedTallyShipment) return;
-    const todayStr = new Date().toLocaleDateString('ar-IQ-u-nu-latn', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    });
     const totalPackages = tallyRows.reduce((sum, row) => sum + (Number(row.packages) || 0), 0);
     const tableRows = tallyRows
       .map(
         (row, index) => `
         <tr>
-          <td style="text-align:center;">${index + 1}</td>
-          <td style="font-weight:800; font-family:monospace;">${escapeHtml(row.clientCode)}</td>
-          <td>
-            <div style="font-weight:800;">${escapeHtml(row.clientName || '—')}</div>
-            <div style="font-size:10px; color:#64748b;">${escapeHtml(row.city || '')}</div>
+          <td class="col-index">${index + 1}</td>
+          <td class="col-code">${escapeHtml(row.code || '')}</td>
+          <td class="col-client">
+            <div class="client-name">${escapeHtml(row.name || '—')}</div>
+            <div class="client-address">${escapeHtml(row.address || row.city || '')}</div>
           </td>
-          <td style="text-align:center; font-weight:800;">${escapeHtml(row.packages || '0')}</td>
+          <td class="col-packages">${escapeHtml(String(row.packages || 0))}</td>
           <td class="tally-cell"></td>
         </tr>`
       )
@@ -350,8 +244,9 @@ export const PrintPrepView: React.FC = () => {
         </div>
         <div class="info-bar">
           <div>الشحنة: <b>${escapeHtml(selectedTallyShipment)}</b></div>
-          <div>تاريخ الجرد: <b>${todayStr}</b></div>
+          <div>تاريخ الجرد: <b>${todayStr()}</b></div>
           <div>إجمالي الطرود المقيدة: <b>${totalPackages} طرد</b></div>
+          <div>عدد البنود: <b>${tallyRows.length}</b></div>
         </div>
         <table>
           <thead>
@@ -371,18 +266,30 @@ export const PrintPrepView: React.FC = () => {
         </div>
       </div>
     `, `
-      @page { size: A4 landscape; margin: 8mm; }
-      .sheet { padding: 4mm; }
-      .header-box { text-align: center; border-bottom: 2px solid #0f172a; padding-bottom: 8px; margin-bottom: 10px; }
-      h2 { margin: 0; font-size: 18px; }
-      p { margin: 3px 0 0; font-size: 11px; color: #64748b; }
-      .info-bar { font-size: 12px; font-weight: 700; margin-bottom: 10px; background: #f1f5f9; padding: 8px 12px; border: 1px solid #cbd5e1; display: flex; justify-content: space-between; }
-      table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
-      th, td { padding: 8px; border: 1px solid #94a3b8; text-align: right; }
-      th { background: #0f172a !important; color: #fff !important; }
+      @page { size: A4 portrait; margin: 6mm; }
+      @media print {
+        @page { size: A4 portrait; margin: 6mm; }
+        html, body { width: 100%; margin: 0; padding: 0; }
+        .sheet { padding: 0; }
+      }
+      .sheet { padding: 2mm; }
+      .header-box { text-align: center; border-bottom: 2px solid #0f172a; padding-bottom: 4px; margin-bottom: 6px; }
+      h2 { margin: 0; font-size: 16px; line-height: 1.2; }
+      p { margin: 2px 0 0; font-size: 10px; color: #64748b; line-height: 1.2; }
+      .info-bar { font-size: 11px; font-weight: 700; margin-bottom: 6px; background: #f1f5f9; padding: 4px 8px; border: 1px solid #cbd5e1; display: flex; justify-content: space-between; gap: 6px; flex-wrap: wrap; line-height: 1.2; }
+      table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+      th, td { padding: 2px 4px; border: 1px solid #94a3b8; text-align: right; line-height: 1.15; vertical-align: middle; }
+      th { background: #0f172a !important; color: #fff !important; font-size: 11px; padding: 3px 4px; }
+      tr { page-break-inside: avoid; }
       tr:nth-child(even) { background: #f8fafc; }
-      .tally-cell { height: 36px; background: #fff !important; }
-      .footer { margin-top: 28px; display: flex; justify-content: space-between; font-size: 12px; font-weight: 700; }
+      .col-index { text-align: center; width: 5%; font-size: 11px; font-weight: 700; }
+      .col-code { width: 16%; font-family: monospace; font-weight: 800; font-size: 15px; }
+      .col-client { width: 35%; }
+      .client-name { font-weight: 800; font-size: 15px; line-height: 1.15; }
+      .client-address { font-size: 18px; color: #334155; line-height: 1.15; font-weight: 600; }
+      .col-packages { text-align: center; width: 12%; font-weight: 800; font-size: 12px; }
+      .tally-cell { height: 16px; min-height: 16px; background: #fff !important; width: 32%; }
+      .footer { margin-top: 10px; display: flex; justify-content: space-between; font-size: 11px; font-weight: 700; page-break-inside: avoid; }
     `);
   };
 
@@ -395,24 +302,12 @@ export const PrintPrepView: React.FC = () => {
         <div>
           <h2 className="text-lg font-extrabold font-['Cairo']">التحظير الطباعي</h2>
           <p className="text-[11px] text-slate-300 font-bold mt-0.5">
-            {activeSheet === 'customers' ? 'قاعدة بيانات العملاء' : 'طباعة وصولات الشحنة'}
+            {activeSheet === 'receipts' ? 'طباعة وصولات الشحنة' : 'جرد الشحنة'}
           </p>
         </div>
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={() => setActiveSheet('customers')}
-          className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-black border ${
-            activeSheet === 'customers'
-              ? 'bg-amber-500 text-slate-950 border-amber-400'
-              : 'bg-white dark:bg-[#1e1e1e] text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'
-          }`}
-        >
-          <Users className="w-4 h-4" />
-          قاعدة بيانات العملاء
-        </button>
         <button
           type="button"
           onClick={() => setActiveSheet('receipts')}
@@ -427,235 +322,53 @@ export const PrintPrepView: React.FC = () => {
         </button>
         <button
           type="button"
-          onClick={openTally}
-          className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-black border bg-amber-500 text-slate-950 border-amber-400 hover:bg-amber-400"
+          onClick={() => {
+            setActiveSheet('tally');
+            setTallyOpen(true);
+          }}
+          className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-black border ${
+            activeSheet === 'tally'
+              ? 'bg-amber-500 text-slate-950 border-amber-400'
+              : 'bg-white dark:bg-[#1e1e1e] text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+          }`}
         >
           <ClipboardList className="w-4 h-4" />
           جرد الشحنة
         </button>
-        {activeSheet === 'receipts' && (
-          <>
-            <select
-              value={selectedReceiptShipment}
-              onChange={(e) => setSelectedReceiptShipment(e.target.value)}
-              className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1e1e1e] text-slate-700 dark:text-slate-200 text-xs font-black px-3 py-2 outline-none min-w-[150px]"
-            >
-              <option value="">كل الشحنات</option>
-              {shipmentOptions.map((code) => (
-                <option key={code} value={code}>
-                  {code}
-                </option>
-              ))}
-            </select>
+      </div>
+
+      {activeSheet === 'receipts' && (
+        <div className="bg-white dark:bg-[#1e1e1e] rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm p-5 sm:p-6">
+          <div className="max-w-xl mx-auto space-y-4">
+            <label className="flex flex-col gap-1.5 text-[11px] font-extrabold text-slate-500">
+              رقم الشحنة
+              <select
+                value={selectedReceiptShipment}
+                onChange={(e) => setSelectedReceiptShipment(e.target.value)}
+                className="w-full rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-[#121212] px-3 py-3 text-sm font-black text-slate-800 dark:text-slate-100 outline-none focus:border-amber-500"
+              >
+                <option value="">اختر رقم الشحنة</option>
+                {shipmentOptions.map((code) => (
+                  <option key={code} value={code}>
+                    {code}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="text-xs font-bold text-slate-500">
+              {selectedReceiptShipment
+                ? `${receiptsToPrint.length} وصل جاهز للطباعة من الشحنة ${selectedReceiptShipment}`
+                : `${shipmentOptions.length} شحنة متاحة في النظام`}
+            </p>
             <button
               type="button"
               onClick={printReceipts}
               disabled={receiptsToPrint.length === 0}
-              className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-black border bg-slate-800 text-amber-300 border-slate-700 hover:bg-slate-700 disabled:opacity-50"
+              className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 px-4 py-3 text-sm font-black disabled:opacity-50"
             >
               <Printer className="w-4 h-4" />
               طباعة الوصولات (A5 أفقي)
             </button>
-          </>
-        )}
-      </div>
-
-      {activeSheet === 'customers' && (
-        <div className="bg-white dark:bg-[#1e1e1e] rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-          <div className="max-h-[70vh] overflow-auto">
-            <table className="w-full text-sm text-right border-collapse">
-              <thead className="sticky top-0 z-10">
-                <tr className="bg-blue-700 text-white">
-                  <th className="px-3 py-3 font-black text-[11px] whitespace-nowrap">#</th>
-                  <th className="px-3 py-3 font-black text-[11px] whitespace-nowrap">كود العميل</th>
-                  <th className="px-3 py-3 font-black text-[11px] whitespace-nowrap">اسم العميل</th>
-                  <th className="px-3 py-3 font-black text-[11px] whitespace-nowrap">رقم الهاتف</th>
-                  <th className="px-3 py-3 font-black text-[11px] whitespace-nowrap">عنوان الاستلام / المدينة</th>
-                </tr>
-              </thead>
-              <tbody>
-                {customers.map((row, index) => (
-                  <tr key={row.id} className="border-t border-slate-100 dark:border-slate-700">
-                    <td className="px-3 py-1.5 text-[11px] font-bold text-slate-400 tabular-nums">{index + 1}</td>
-                    <td className="px-1 py-1">
-                      <input
-                        value={row.clientCode}
-                        onChange={(e) => updateCustomer(row.id, { clientCode: e.target.value })}
-                        className={cellInput}
-                      />
-                    </td>
-                    <td className="px-1 py-1">
-                      <input
-                        value={row.clientName}
-                        onChange={(e) => updateCustomer(row.id, { clientName: e.target.value })}
-                        className={cellInput}
-                      />
-                    </td>
-                    <td className="px-1 py-1">
-                      <input
-                        value={row.phone}
-                        onChange={(e) => updateCustomer(row.id, { phone: e.target.value })}
-                        className={cellInput}
-                      />
-                    </td>
-                    <td className="px-1 py-1">
-                      <input
-                        value={row.city}
-                        onChange={(e) => updateCustomer(row.id, { city: e.target.value })}
-                        className={cellInput}
-                      />
-                    </td>
-                  </tr>
-                ))}
-                <tr className="border-t border-slate-100 dark:border-slate-700">
-                  <td colSpan={5} className="px-3 py-2">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setCustomers((prev) => [...prev, emptyCustomerRow((prev[prev.length - 1]?.id ?? 0) + 1)])
-                      }
-                      className="text-[11px] font-black text-blue-700 dark:text-blue-300"
-                    >
-                      + إضافة صف
-                    </button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {activeSheet === 'receipts' && (
-        <div className="bg-white dark:bg-[#1e1e1e] rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-          <div className="max-h-[70vh] overflow-auto">
-            <table className="w-full text-sm text-right border-collapse">
-              <thead className="sticky top-0 z-10">
-                <tr className="bg-amber-500 text-slate-950">
-                  <th className="px-3 py-3 font-black text-[11px] whitespace-nowrap border-l border-amber-400/60">#</th>
-                  {RECEIPT_COLUMNS.map((col) => (
-                    <th
-                      key={col}
-                      className="px-3 py-3 font-black text-[11px] whitespace-nowrap border-l border-amber-400/60 last:border-l-0"
-                    >
-                      {col}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {resolvedReceipts.map((row, index) => (
-                  <tr
-                    key={row.id}
-                    className="border-t border-slate-100 dark:border-slate-700 hover:bg-slate-50/80 dark:hover:bg-slate-800/40"
-                  >
-                    <td className="px-3 py-1.5 text-[11px] font-bold text-slate-400 tabular-nums">{index + 1}</td>
-                    <td className="px-1 py-1">
-                      <input
-                        value={row.shipment}
-                        onChange={(e) => updateReceipt(row.id, { shipment: e.target.value })}
-                        placeholder="RA6003"
-                        className={cellInput}
-                      />
-                    </td>
-                    <td className="px-1 py-1">
-                      <input
-                        value={row.clientCode}
-                        onChange={(e) => updateReceipt(row.id, { clientCode: e.target.value })}
-                        placeholder="B449"
-                        className={cellInput}
-                      />
-                    </td>
-                    <td className={autoCell}>{row.clientName}</td>
-                    <td className={autoCell}>{row.phone}</td>
-                    <td className={autoCell}>{row.city}</td>
-                    <td className="px-1 py-1">
-                      <input
-                        value={row.packages}
-                        onChange={(e) => updateReceipt(row.id, { packages: e.target.value })}
-                        inputMode="numeric"
-                        className={`${cellInput} text-center`}
-                      />
-                    </td>
-                    <td className="px-1 py-1">
-                      <input
-                        value={row.weight}
-                        onChange={(e) => updateReceipt(row.id, { weight: e.target.value })}
-                        inputMode="decimal"
-                        className={`${cellInput} text-center`}
-                      />
-                    </td>
-                    <td className="px-1 py-1">
-                      <select
-                        value={row.type}
-                        onChange={(e) => updateReceipt(row.id, { type: e.target.value as ShipmentKind })}
-                        className={`${cellInput} min-w-[90px]`}
-                      >
-                        <option value=""></option>
-                        <option value="جوي">جوي</option>
-                        <option value="بحري">بحري</option>
-                      </select>
-                    </td>
-                    <td className="px-1 py-1">
-                      <input
-                        value={row.price}
-                        onChange={(e) => updateReceipt(row.id, { price: e.target.value })}
-                        inputMode="decimal"
-                        className={`${cellInput} text-center`}
-                      />
-                    </td>
-                    <td className="px-1 py-1">
-                      <input
-                        value={row.sales}
-                        onChange={(e) => updateReceipt(row.id, { sales: e.target.value })}
-                        inputMode="decimal"
-                        className={`${cellInput} text-center`}
-                      />
-                    </td>
-                    <td className="px-1 py-1">
-                      <input
-                        type="date"
-                        value={row.issueDate}
-                        onChange={(e) => updateReceipt(row.id, { issueDate: e.target.value })}
-                        className={`${cellInput} min-w-[130px]`}
-                      />
-                    </td>
-                    <td className="px-1 py-1">
-                      <select
-                        value={row.paymentMethod}
-                        onChange={(e) => updateReceipt(row.id, { paymentMethod: e.target.value as PaymentMethod })}
-                        className={`${cellInput} min-w-[90px]`}
-                      >
-                        <option value=""></option>
-                        <option value="نقداً">نقداً</option>
-                        <option value="آجل">آجل</option>
-                      </select>
-                    </td>
-                    <td className="px-3 py-1 text-center">
-                      <input
-                        type="checkbox"
-                        checked={row.printed}
-                        onChange={(e) => updateReceipt(row.id, { printed: e.target.checked })}
-                        className="h-4 w-4 accent-amber-500"
-                      />
-                    </td>
-                  </tr>
-                ))}
-                <tr className="border-t border-slate-100 dark:border-slate-700">
-                  <td colSpan={14} className="px-3 py-2">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setReceipts((prev) => [...prev, emptyReceiptRow((prev[prev.length - 1]?.id ?? 0) + 1)])
-                      }
-                      className="text-[11px] font-black text-amber-700 dark:text-amber-300"
-                    >
-                      + إضافة صف
-                    </button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
           </div>
         </div>
       )}
@@ -687,7 +400,14 @@ export const PrintPrepView: React.FC = () => {
                   <Printer className="w-4 h-4" />
                   طباعة PDF
                 </button>
-                <button type="button" onClick={() => setTallyOpen(false)} className="rounded-lg p-1 hover:bg-slate-700">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTallyOpen(false);
+                    setActiveSheet('receipts');
+                  }}
+                  className="rounded-lg p-1 hover:bg-slate-700"
+                >
                   <X className="w-4 h-4" />
                 </button>
               </div>
@@ -695,11 +415,8 @@ export const PrintPrepView: React.FC = () => {
             <div className="flex-1 overflow-auto tally-print-body p-4">
               {selectedTallyShipment ? (
                 <div className="space-y-3">
-                  <div className="print-only hidden">
-                    <h1 className="text-xl font-extrabold">جرد الشحنة {selectedTallyShipment}</h1>
-                  </div>
                   <table className="w-full text-sm text-right border-collapse">
-                    <thead className="bg-slate-800 text-white sticky top-0">
+                    <thead className="bg-[#1e3a5f] text-white sticky top-0">
                       <tr>
                         <th className="px-3 py-3 text-center text-xs font-extrabold w-14">#</th>
                         <th className="px-3 py-3 text-xs font-extrabold w-36">كود العميل</th>
@@ -717,12 +434,12 @@ export const PrintPrepView: React.FC = () => {
                         </tr>
                       ) : (
                         tallyRows.map((row, index) => (
-                          <tr key={row.id} className="border-t border-slate-200 dark:border-slate-700">
+                          <tr key={row.id || `${row.shipment}-${row.code}-${index}`} className="border-t border-slate-200 dark:border-slate-700">
                             <td className="px-3 py-3 text-center text-xs font-bold text-slate-500">{index + 1}</td>
-                            <td className="px-3 py-3 font-black font-mono">{row.clientCode}</td>
+                            <td className="px-3 py-3 font-black font-mono">{row.code}</td>
                             <td className="px-3 py-3">
-                              <div className="font-extrabold text-slate-800 dark:text-slate-100">{row.clientName}</div>
-                              <div className="text-[11px] text-slate-400 mt-0.5">{row.city}</div>
+                              <div className="font-extrabold text-slate-800 dark:text-slate-100">{row.name}</div>
+                              <div className="text-[11px] text-slate-400 mt-0.5">{row.address || row.city}</div>
                             </td>
                             <td className="px-3 py-3 text-center font-black tabular-nums">{row.packages}</td>
                             <td className="px-3 py-3">
@@ -734,7 +451,9 @@ export const PrintPrepView: React.FC = () => {
                     </tbody>
                   </table>
                 </div>
-              ) : null}
+              ) : (
+                <p className="text-center text-sm font-bold text-slate-400 py-16">اختر رقم الشحنة لعرض كافة البنود</p>
+              )}
             </div>
           </div>
         </div>
